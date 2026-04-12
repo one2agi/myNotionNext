@@ -1,0 +1,51 @@
+name: Build & Deploy to Aliyun
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
+        run: npm run build
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Rsync to server
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 47.113.227.114 >> ~/.ssh/known_hosts 2>/dev/null
+          rsync -avz --delete \
+            --exclude 'node_modules' \
+            --exclude '.next/cache' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            .next/standalone/ \
+            deploy@47.113.227.114:/home/deploy/notion-next/
+
+      - name: Restart service
+        run: |
+          ssh deploy@47.113.227.114 "
+            cp -r /home/deploy/notion-next/.env.local /home/deploy/notion-next/ 2>/dev/null || true
+            cd /home/deploy/notion-next
+            pm2 restart notion-next || (pm2 start 'node server.js' --name notion-next && pm2 save)
+          "
