@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -47,5 +51,5 @@ jobs:
           ssh deploy@47.113.227.114 "
             cp -r /home/deploy/notion-next/.env.local /home/deploy/notion-next/ 2>/dev/null || true
             cd /home/deploy/notion-next
-            pm2 restart notion-next || (pm2 start 'node server.js' --name notion-next && pm2 save)
+            ls -la
           "
