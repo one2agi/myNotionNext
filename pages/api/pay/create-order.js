@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import { createNativeOrder } from '@/lib/wechatpay'
 import { products } from '@/products.config'
+import wechatpayConfig from '@/wechatpay.config'
 
 /**
  * POST /api/pay/create-order
@@ -23,7 +24,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const outTradeNo = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
     // MVP 不接回调，notify_url 用占位值。后续接入 notify 时换成真实公网 URL。
-    const notifyUrl = process.env.WECHAT_NOTIFY_URL || 'https://example.com/api/pay/notify'
+    const notifyUrl =
+      process.env.WECHAT_NOTIFY_URL || wechatpayConfig.WECHAT_NOTIFY_URL
 
     const { codeUrl } = await createNativeOrder({
       outTradeNo,
