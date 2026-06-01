@@ -73,7 +73,8 @@
     "react-hotkeys-hook": "^4.6.2",
     "react-notion-x": "7.10.0",
     "react-share": "^5.2.2",
-    "react-tweet-embed": "~2.0.0"
+    "react-tweet-embed": "~2.0.0",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.1.4",

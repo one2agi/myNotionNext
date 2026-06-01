@@ -275,6 +275,9 @@ const CONFIG = {
 
   STARTER_POST_REDIRECT_ENABLE: true,
   STARTER_POST_REDIRECT_URL: 'https://www.faiz-world.com',
-  STARTER_NEWSLETTER: false
+  STARTER_NEWSLETTER: false,
+
+  // ===== 微信支付 Paywall =====
+  STARTER_PAYWALL_ENABLE: true
 }
 export default CONFIG
