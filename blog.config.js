@@ -151,7 +151,13 @@ const BLOG = {
     '欢迎来到我的博客,记录与分享,保持好奇与持续输出',
 
   // uuid重定向至 slug
-  UUID_REDIRECT: process.env.UUID_REDIRECT || false
+  UUID_REDIRECT: process.env.UUID_REDIRECT || false,
+
+  // ===== 微信支付 Paywall（MVP 接入） =====
+  // 临时关掉 starter 主题的文章页整页重定向（默认是 true，会把所有文章 302 到
+  // https://www.faiz-world.com，根本看不到挂载的 PaywallButton）。
+  // 跑通支付链路后视情况决定是否恢复。
+  STARTER_POST_REDIRECT_ENABLE: false
 }
 
 module.exports = BLOG
