@@ -127,14 +127,28 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
 
     // 2.5 PEM 格式快速校验（只暴露 length + first/last 几个字符，不泄漏 key）
     const pem = env.WECHAT_PRIVATE_KEY
-    if (!pem.startsWith('-----BEGIN')) {
+    if (!pem.includes('PRIVATE KEY')) {
       return jsonResponse(
         {
-          error: 'PEM 格式错误：从 KV 拿到的私钥不以 -----BEGIN 开头。',
+          error: 'KV 里的值不含 "PRIVATE KEY" 字符串。是不是贴错了文件（贴成证书 / 公钥 / 其他格式）？',
           diag: {
             length: pem.length,
-            first30: pem.slice(0, 30),
-            last30: pem.slice(-30),
+            first60: pem.slice(0, 60),
+            last60: pem.slice(-60),
+            hasNewline: pem.includes('\n'),
+            lineCount: pem.split('\n').length
+          }
+        },
+        500
+      )
+    }
+    if (!pem.startsWith('-----BEGIN PRIVATE KEY-----')) {
+      return jsonResponse(
+        {
+          error: 'KV 里的私钥 header 不是 "-----BEGIN PRIVATE KEY-----"。微信支付 V3 要求 PKCS#8 格式（不带 RSA/EC 前缀）。',
+          diag: {
+            length: pem.length,
+            first60: pem.slice(0, 60),
             hasNewline: pem.includes('\n'),
             lineCount: pem.split('\n').length
           }
