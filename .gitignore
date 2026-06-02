@@ -55,3 +55,8 @@ package-lock.json
 # yarn.lock
 
 .notion-api-lock
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*
+  
