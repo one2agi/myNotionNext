@@ -36,7 +36,6 @@ import SmartLink from '@/components/SmartLink'
 import { ArticleLock } from './components/ArticleLock'
 import { Banner } from './components/Banner'
 import { CTA } from './components/CTA'
-import { PaywallButton } from './components/PaywallButton'
 import SearchInput from './components/SearchInput'
 import { SignInForm } from './components/SignInForm'
 import { SignUpForm } from './components/SignUpForm'
@@ -186,7 +185,6 @@ const LayoutSlug = props => {
                 <NotionPage {...props} />
                 <Comment frontMatter={post} />
                 <ShareBar post={post} />
-                {siteConfig('STARTER_PAYWALL_ENABLE', true, CONFIG) && <PaywallButton />}
               </div>
             )}
           </div>

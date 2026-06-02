@@ -15,9 +15,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const product = products[0]
+    const { productId } = req.body || {}
+    const product = products.find(p => p.id === productId)
+
     if (!product) {
-      return res.status(500).json({ error: 'No product configured' })
+      return res.status(400).json({ error: `Unknown productId: ${productId}` })
+    }
+    if (product.price === 0 || !Number.isInteger(product.price) || product.price < 1) {
+      return res
+        .status(400)
+        .json({ error: `Product ${product.id} has no payable price` })
     }
 
     // 商户订单号：时间戳 + 6 位随机串，避免重复
@@ -39,7 +46,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       codeUrl,
       productId: product.id,
       productName: product.name,
-      totalFen: product.price
+      totalFen: product.price,
+      currency: product.currency
     })
   } catch (e: any) {
     console.error('[pay/create-order]', e)

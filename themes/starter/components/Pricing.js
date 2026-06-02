@@ -1,11 +1,21 @@
+import { useState } from 'react'
 import { siteConfig } from '@/lib/config'
 import SmartLink from '@/components/SmartLink'
+import { PayModal } from './PayModal'
+import { products } from '@/products.config'
 
 /**
  * 价格板块
- * @returns
+ * - 第 1 张卡片（免费）：保持 SmartLink 跳外部链接
+ * - 第 2、3 张卡片（付费）：点按钮弹 PayModal，扫码支付
+ *
+ * 商品 id 跟 products.config.js 配对（starter-full / starter-coaching）
  */
 export const Pricing = () => {
+  const [activeProduct, setActiveProduct] = useState(null)
+
+  const paidProducts = products.filter(p => p.price > 0)
+
   return (
     <>
       {/* <!-- ====== Pricing Section Start --> */}
@@ -30,7 +40,7 @@ export const Pricing = () => {
           </div>
 
           <div className='-mx-4 flex flex-wrap justify-center'>
-            {/* 第一个付费计划 */}
+            {/* 第一个付费计划：免费，保持 SmartLink */}
             <div className='w-full px-4 md:w-1/2 lg:w-1/3'>
               <div className='relative z-10 mb-10 overflow-hidden rounded-xl bg-white px-8 py-10 shadow-pricing dark:bg-dark-2 sm:p-12 lg:px-6 lg:py-10 xl:p-14'>
                 <span className='mb-5 block text-xl font-medium text-dark dark:text-white'>
@@ -74,105 +84,116 @@ export const Pricing = () => {
               </div>
             </div>
 
-            {/* 第二个付费计划 */}
-            <div className='w-full px-4 md:w-1/2 lg:w-1/3'>
-              <div className='relative z-10 mb-10 overflow-hidden rounded-xl bg-white px-8 py-10 shadow-pricing dark:bg-dark-2 sm:p-12 lg:px-6 lg:py-10 xl:p-14'>
-                <p
-                  style={{
-                    writingMode: 'vertical-rl',
-                    textOrientation: 'mixed'
-                  }}
-                  className='absolute p-1 right-0 top-0 inline-block rounded-bl-md rounded-tl-md bg-primary text-base font-medium text-white tracking-wider'>
-                  {siteConfig('STARTER_PRICING_2_TAG')}
-                </p>
-                <span className='mb-5 block text-xl font-medium text-dark dark:text-white'>
-                  {siteConfig('STARTER_PRICING_2_TITLE')}
-                </span>
-                <h2 className='space-x-1 mb-11 text-4xl font-semibold text-dark dark:text-white xl:text-[42px] xl:leading-[1.21]'>
-                  <span className='text-xl font-medium'>
-                    {siteConfig('STARTER_PRICING_2_PRICE_CURRENCY')}
+            {/* 第二个付费计划：弹 PayModal */}
+            {paidProducts[0] && (
+              <div className='w-full px-4 md:w-1/2 lg:w-1/3'>
+                <div className='relative z-10 mb-10 overflow-hidden rounded-xl bg-white px-8 py-10 shadow-pricing dark:bg-dark-2 sm:p-12 lg:px-6 lg:py-10 xl:p-14'>
+                  <p
+                    style={{
+                      writingMode: 'vertical-rl',
+                      textOrientation: 'mixed'
+                    }}
+                    className='absolute p-1 right-0 top-0 inline-block rounded-bl-md rounded-tl-md bg-primary text-base font-medium text-white tracking-wider'>
+                    {siteConfig('STARTER_PRICING_2_TAG')}
+                  </p>
+                  <span className='mb-5 block text-xl font-medium text-dark dark:text-white'>
+                    {siteConfig('STARTER_PRICING_2_TITLE')}
                   </span>
-                  <span className='-ml-1 -tracking-[2px]'>
-                    {siteConfig('STARTER_PRICING_2_PRICE')}
-                  </span>
-                  <span className='text-base font-normal text-body-color dark:text-dark-6'>
-                    {siteConfig('STARTER_PRICING_2_PRICE_PERIOD')}
-                  </span>
-                </h2>
+                  <h2 className='space-x-1 mb-11 text-4xl font-semibold text-dark dark:text-white xl:text-[42px] xl:leading-[1.21]'>
+                    <span className='text-xl font-medium'>
+                      {siteConfig('STARTER_PRICING_2_PRICE_CURRENCY')}
+                    </span>
+                    <span className='-ml-1 -tracking-[2px]'>
+                      {(paidProducts[0].price / 100).toFixed(2)}
+                    </span>
+                    <span className='text-base font-normal text-body-color dark:text-dark-6'>
+                      {siteConfig('STARTER_PRICING_2_PRICE_PERIOD')}
+                    </span>
+                  </h2>
 
-                <div className='mb-[50px]'>
-                  <h5 className='mb-5 text-lg font-medium text-dark dark:text-white'>
-                    {siteConfig('STARTER_PRICING_2_HEADER')}
-                  </h5>
-                  <div className='flex flex-col gap-[14px]'>
-                    {siteConfig('STARTER_PRICING_2_FEATURES')
-                      ?.split(',')
-                      .map((feature, index) => {
-                        return (
-                          <p
-                            key={index}
-                            className='text-base text-body-color dark:text-dark-6'>
-                            {feature}
-                          </p>
-                        )
-                      })}
+                  <div className='mb-[50px]'>
+                    <h5 className='mb-5 text-lg font-medium text-dark dark:text-white'>
+                      {siteConfig('STARTER_PRICING_2_HEADER')}
+                    </h5>
+                    <div className='flex flex-col gap-[14px]'>
+                      {siteConfig('STARTER_PRICING_2_FEATURES')
+                        ?.split(',')
+                        .map((feature, index) => {
+                          return (
+                            <p
+                              key={index}
+                              className='text-base text-body-color dark:text-dark-6'>
+                              {feature}
+                            </p>
+                          )
+                        })}
+                    </div>
                   </div>
+                  <button
+                    type='button'
+                    onClick={() => setActiveProduct(paidProducts[0])}
+                    className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
+                    立即购买
+                  </button>
                 </div>
-                <SmartLink
-                  href={siteConfig('STARTER_PRICING_2_BUTTON_URL', '')}
-                  className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
-                  {siteConfig('STARTER_PRICING_2_BUTTON_TEXT')}
-                </SmartLink>
               </div>
-            </div>
+            )}
 
-            {/* 第三个付费计划 */}
-            <div className='w-full px-4 md:w-1/2 lg:w-1/3'>
-              <div className='relative z-10 mb-10 overflow-hidden rounded-xl bg-white px-8 py-10 shadow-pricing dark:bg-dark-2 sm:p-12 lg:px-6 lg:py-10 xl:p-14'>
-                <span className='mb-5 block text-xl font-medium text-dark dark:text-white'>
-                  {siteConfig('STARTER_PRICING_3_TITLE')}
-                </span>
-                <h2 className='space-x-1 mb-11 text-4xl font-semibold text-dark dark:text-white xl:text-[42px] xl:leading-[1.21]'>
-                  <span className='text-xl font-medium'>
-                    {siteConfig('STARTER_PRICING_3_PRICE_CURRENCY')}
+            {/* 第三个付费计划：弹 PayModal */}
+            {paidProducts[1] && (
+              <div className='w-full px-4 md:w-1/2 lg:w-1/3'>
+                <div className='relative z-10 mb-10 overflow-hidden rounded-xl bg-white px-8 py-10 shadow-pricing dark:bg-dark-2 sm:p-12 lg:px-6 lg:py-10 xl:p-14'>
+                  <span className='mb-5 block text-xl font-medium text-dark dark:text-white'>
+                    {siteConfig('STARTER_PRICING_3_TITLE')}
                   </span>
-                  <span className='-ml-1 -tracking-[2px]'>
-                    {siteConfig('STARTER_PRICING_3_PRICE')}
-                  </span>
-                  <span className='text-base font-normal text-body-color dark:text-dark-6'>
-                    {siteConfig('STARTER_PRICING_3_PRICE_PERIOD')}
-                  </span>
-                </h2>
+                  <h2 className='space-x-1 mb-11 text-4xl font-semibold text-dark dark:text-white xl:text-[42px] xl:leading-[1.21]'>
+                    <span className='text-xl font-medium'>
+                      {siteConfig('STARTER_PRICING_3_PRICE_CURRENCY')}
+                    </span>
+                    <span className='-ml-1 -tracking-[2px]'>
+                      {(paidProducts[1].price / 100).toFixed(2)}
+                    </span>
+                    <span className='text-base font-normal text-body-color dark:text-dark-6'>
+                      {siteConfig('STARTER_PRICING_3_PRICE_PERIOD')}
+                    </span>
+                  </h2>
 
-                <div className='mb-[50px]'>
-                  <h5 className='mb-5 text-lg font-medium text-dark dark:text-white'>
-                    {siteConfig('STARTER_PRICING_3_HEADER')}
-                  </h5>
-                  <div className='flex flex-col gap-[14px]'>
-                    {siteConfig('STARTER_PRICING_3_FEATURES')
-                      ?.split(',')
-                      .map((feature, index) => {
-                        return (
-                          <p
-                            key={index}
-                            className='text-base text-body-color dark:text-dark-6'>
-                            {feature}
-                          </p>
-                        )
-                      })}
+                  <div className='mb-[50px]'>
+                    <h5 className='mb-5 text-lg font-medium text-dark dark:text-white'>
+                      {siteConfig('STARTER_PRICING_3_HEADER')}
+                    </h5>
+                    <div className='flex flex-col gap-[14px]'>
+                      {siteConfig('STARTER_PRICING_3_FEATURES')
+                        ?.split(',')
+                        .map((feature, index) => {
+                          return (
+                            <p
+                              key={index}
+                              className='text-base text-body-color dark:text-dark-6'>
+                              {feature}
+                            </p>
+                          )
+                        })}
+                    </div>
                   </div>
+                  <button
+                    type='button'
+                    onClick={() => setActiveProduct(paidProducts[1])}
+                    className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
+                    立即购买
+                  </button>
                 </div>
-                <SmartLink
-                  href={siteConfig('STARTER_PRICING_3_BUTTON_URL', '')}
-                  className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
-                  {siteConfig('STARTER_PRICING_3_BUTTON_TEXT')}
-                </SmartLink>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </section>
       {/* <!-- ====== Pricing Section End --> */}
+
+      <PayModal
+        product={activeProduct}
+        onClose={() => setActiveProduct(null)}
+      />
     </>
   )
 }
