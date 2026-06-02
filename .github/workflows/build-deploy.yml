@@ -20,15 +20,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          cache: 'yarn'
 
       - name: Install dependencies
-        run: npm ci
+        run: yarn install --frozen-lockfile
 
       - name: Build
         env:
           NOTION_PAGE_ID: ${{ secrets.NOTION_PAGE_ID }}
-        run: npm run build
+        run: yarn build
 
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
