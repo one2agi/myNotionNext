@@ -85,13 +85,22 @@ async function loadWxPayEnv(rawEnv: Record<string, any>): Promise<WxPayEnv> {
   }
 }
 
-/** 带 TTL 的缓存读取 */
+/** 带 TTL 的缓存读取 — 但**空值不缓存**（防止冷启动/绑定延迟把空值冻住） */
 async function getEnvWithCache(rawEnv: Record<string, any>): Promise<WxPayEnv> {
   const now = Date.now()
   if (cachedEnv && now - cachedAt < CACHE_TTL_MS) return cachedEnv
-  cachedEnv = await loadWxPayEnv(rawEnv)
-  cachedAt = now
-  return cachedEnv
+  const fresh = await loadWxPayEnv(rawEnv)
+  // 只在所有必填字段都有值时才缓存
+  const allFilled = Object.values(fresh).every(v => typeof v === 'string' && v.length > 0)
+  if (allFilled) {
+    cachedEnv = fresh
+    cachedAt = now
+  } else {
+    // 至少一个字段空，**不缓存**，下次重试
+    cachedEnv = null
+    cachedAt = 0
+  }
+  return fresh
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -115,11 +124,19 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
       .filter(([_, v]) => !v)
       .map(([k]) => k)
     if (missing.length) {
+      // 加 KV 诊断信息
+      const kv = (context.env as any)[KV_VAR_NAME]
       return jsonResponse(
         {
           error:
             `Missing WECHAT_* env: ${missing.join(', ')}. ` +
-            `检查：1) 控制台 6 个 WECHAT_* env 是否齐；2) KV namespace 是否绑到 one2agi 项目，变量名是否填 ${KV_VAR_NAME}；3) KV key ${PEM_KEY} 是否已 put PEM。`
+            `检查：1) 控制台 6 个 WECHAT_* env 是否齐；2) KV namespace 是否绑到 one2agi 项目，变量名是否填 ${KV_VAR_NAME}；3) KV key ${PEM_KEY} 是否已 put PEM。`,
+          kvDiag: {
+            kvBindingPresent: !!kv,
+            kvGetMethod: kv ? typeof kv.get : 'N/A',
+            cachedEnvPresent: !!cachedEnv,
+            cachedAgeMs: cachedAt ? Date.now() - cachedAt : null
+          }
         },
         500
       )
