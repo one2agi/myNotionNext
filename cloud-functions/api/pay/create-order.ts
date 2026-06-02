@@ -4,16 +4,24 @@
  * 路径映射：cloud-functions/api/pay/create-order.ts → POST /api/pay/create-order
  * 前端 fetch('/api/pay/create-order', { method: 'POST' }) 不变
  *
- * env 读取：context.env.WECHAT_*（不是 process.env）
- * 入参：context.request.json()
- * 响应：new Response(JSON.stringify(...), { status, headers })
+ * Env 读取：
+ *   - context.env.WECHAT_APPID / MCHID / SERIAL_NO / NOTIFY_URL / API_V3_KEY（普通 env）
+ *   - context.env.WECHAT_KV（EdgeOne KV namespace binding，专用存储）
+ *   - 从 KV 拿私钥：await WECHAT_KV.get('wechatpay_private_key', { type: 'text' })
+ *
+ * 为什么私钥放 KV 不放 env：
+ *   - EdgeOne Pages Cloud Functions env 单值上限约 1000 字符，1680 字符 PEM 装不下
+ *   - KV 单 value 上限 25 MB，私钥 / 证书类配置天然归属
+ *   - 改私钥不需 redeploy
  *
  * 业务流程：
  *   1. 读 productId
- *   2. 校验 6 个 WECHAT_* env
+ *   2. 校验 6 个 WECHAT_* env（其中 PRIVATE_KEY 来自 KV）
  *   3. 查 products.config.js 找商品
  *   4. 调 lib/wechatpay.js 的 createNativeOrder（注入 env）
  *   5. 返回 codeUrl 等
+ *
+ * 缓存：模块级缓存 WxPayEnv 60s，避免每请求打 KV（KV 走边缘节点缓存，也很快）
  */
 
 interface EventContext {
@@ -39,15 +47,51 @@ interface Product {
   currency: string
 }
 
-function pickEnv(env: Record<string, string>): WxPayEnv {
-  return {
-    WECHAT_APPID: env.WECHAT_APPID,
-    WECHAT_MCHID: env.WECHAT_MCHID,
-    WECHAT_SERIAL_NO: env.WECHAT_SERIAL_NO,
-    WECHAT_NOTIFY_URL: env.WECHAT_NOTIFY_URL,
-    WECHAT_API_V3_KEY: env.WECHAT_API_V3_KEY,
-    WECHAT_PRIVATE_KEY: env.WECHAT_PRIVATE_KEY
+/** EdgeOne KV Storage binding 的运行时形态（简化版） */
+interface EdgeOneKV {
+  get(key: string, opts?: { type?: 'text' | 'json' | 'arrayBuffer' | 'stream' }): Promise<any>
+  put(key: string, value: any): Promise<void>
+}
+
+const KV_VAR_NAME = 'WECHAT_KV'
+const PEM_KEY = 'wechatpay_private_key'
+const CACHE_TTL_MS = 60_000
+
+/** 模块级缓存：避免每请求都打 KV */
+let cachedEnv: WxPayEnv | null = null
+let cachedAt = 0
+
+/** 从 context.env + KV namespace 拼出完整 WxPayEnv */
+async function loadWxPayEnv(rawEnv: Record<string, any>): Promise<WxPayEnv> {
+  // 从 KV 拿私钥
+  const kv = rawEnv[KV_VAR_NAME] as EdgeOneKV | undefined
+  let privateKey = ''
+  if (kv && typeof kv.get === 'function') {
+    try {
+      const got = await kv.get(PEM_KEY, { type: 'text' })
+      privateKey = typeof got === 'string' ? got : ''
+    } catch (e) {
+      console.error('[pay/create-order] KV get failed:', e)
+    }
   }
+
+  return {
+    WECHAT_APPID: rawEnv.WECHAT_APPID || '',
+    WECHAT_MCHID: rawEnv.WECHAT_MCHID || '',
+    WECHAT_SERIAL_NO: rawEnv.WECHAT_SERIAL_NO || '',
+    WECHAT_NOTIFY_URL: rawEnv.WECHAT_NOTIFY_URL || '',
+    WECHAT_API_V3_KEY: rawEnv.WECHAT_API_V3_KEY || '',
+    WECHAT_PRIVATE_KEY: privateKey
+  }
+}
+
+/** 带 TTL 的缓存读取 */
+async function getEnvWithCache(rawEnv: Record<string, any>): Promise<WxPayEnv> {
+  const now = Date.now()
+  if (cachedEnv && now - cachedAt < CACHE_TTL_MS) return cachedEnv
+  cachedEnv = await loadWxPayEnv(rawEnv)
+  cachedAt = now
+  return cachedEnv
 }
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -65,15 +109,17 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
     }
     const { productId } = body
 
-    // 2. env 校验
-    const env = pickEnv(context.env)
+    // 2. env 校验（含 KV 私钥）
+    const env = await getEnvWithCache(context.env as any)
     const missing = (Object.entries(env) as [string, string | undefined][])
       .filter(([_, v]) => !v)
       .map(([k]) => k)
     if (missing.length) {
       return jsonResponse(
         {
-          error: `Missing EdgeOne env: ${missing.join(', ')}. 请去 console.cloud.tencent.com/edgeone → Pages → one2agi → 项目设置 → 环境变量 配置。`
+          error:
+            `Missing WECHAT_* env: ${missing.join(', ')}. ` +
+            `检查：1) 控制台 6 个 WECHAT_* env 是否齐；2) KV namespace 是否绑到 one2agi 项目，变量名是否填 ${KV_VAR_NAME}；3) KV key ${PEM_KEY} 是否已 put PEM。`
         },
         500
       )
