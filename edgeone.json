@@ -1,6 +1,5 @@
 {
   "buildCommand": "yarn build",
   "outputDirectory": ".next",
-  "nodeVersion": "20.18.0",
-  "installCommand": "yarn install --frozen-lockfile"
+  "nodeVersion": "20.18.0"
 }
