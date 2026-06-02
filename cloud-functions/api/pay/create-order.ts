@@ -125,6 +125,24 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
       )
     }
 
+    // 2.5 PEM 格式快速校验（只暴露 length + first/last 几个字符，不泄漏 key）
+    const pem = env.WECHAT_PRIVATE_KEY
+    if (!pem.startsWith('-----BEGIN')) {
+      return jsonResponse(
+        {
+          error: 'PEM 格式错误：从 KV 拿到的私钥不以 -----BEGIN 开头。',
+          diag: {
+            length: pem.length,
+            first30: pem.slice(0, 30),
+            last30: pem.slice(-30),
+            hasNewline: pem.includes('\n'),
+            lineCount: pem.split('\n').length
+          }
+        },
+        500
+      )
+    }
+
     // 3. 查商品（动态 import 避免 ESM 解析 @/）
     const productsModule = await import('../../../products.config.js')
     const products: Product[] = productsModule.products
