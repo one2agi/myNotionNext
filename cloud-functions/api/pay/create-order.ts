@@ -6,23 +6,29 @@
  *
  * Env 读取：
  *   - context.env.WECHAT_APPID / MCHID / SERIAL_NO / NOTIFY_URL / API_V3_KEY（普通 env）
- *   - context.env.WECHAT_KV（EdgeOne KV namespace binding，专用存储）
- *   - 从 KV 拿私钥：await WECHAT_KV.get('wechatpay_private_key', { type: 'text' })
+ *   - 私钥从 EdgeOne Blob Storage 拿：getStore('wxpay-secrets').get('apiclient_key.pem', { type: 'text' })
+ *   - Blob 鉴权**全自动**（deploy credentials），**无需** env var / binding
  *
- * 为什么私钥放 KV 不放 env：
+ * 为什么私钥放 Blob 不放 env：
  *   - EdgeOne Pages Cloud Functions env 单值上限约 1000 字符，1680 字符 PEM 装不下
- *   - KV 单 value 上限 25 MB，私钥 / 证书类配置天然归属
+ *   - Blob 单 value 上限 25 MB，私钥 / 证书类配置天然归属
  *   - 改私钥不需 redeploy
+ *
+ * 为什么不用 KV Storage：
+ *   - EdgeOne KV **只支持 Edge Functions**（V8 isolate），不支持 Cloud Functions (Node.js)
+ *   - 官方文档原话："Currently, it is only supported for use within Edge Functions"
  *
  * 业务流程：
  *   1. 读 productId
- *   2. 校验 6 个 WECHAT_* env（其中 PRIVATE_KEY 来自 KV）
- *   3. 查 products.config.js 找商品
- *   4. 调 lib/wechatpay.js 的 createNativeOrder（注入 env）
- *   5. 返回 codeUrl 等
+ *   2. 校验 6 个 WECHAT_* env（PRIVATE_KEY 来自 Blob）
+ *   3. 校验 PEM 格式（PKCS#8, startsWith "-----BEGIN PRIVATE KEY-----")
+ *   4. 查 products.config.js 找商品
+ *   5. 调 lib/wechatpay.js 的 createNativeOrder（注入 env）
+ *   6. 返回 codeUrl 等
  *
- * 缓存：模块级缓存 WxPayEnv 60s，避免每请求打 KV（KV 走边缘节点缓存，也很快）
+ * 缓存：模块级缓存 WxPayEnv 60s，空值不缓存（防止冷启动把空值冻住）
  */
+import { getStore } from '@edgeone/pages-blob'
 
 interface EventContext {
   request: Request
@@ -47,32 +53,28 @@ interface Product {
   currency: string
 }
 
-/** EdgeOne KV Storage binding 的运行时形态（简化版） */
-interface EdgeOneKV {
-  get(key: string, opts?: { type?: 'text' | 'json' | 'arrayBuffer' | 'stream' }): Promise<any>
-  put(key: string, value: any): Promise<void>
-}
-
-const KV_VAR_NAME = 'WECHAT_KV'
-const PEM_KEY = 'wechatpay_private_key'
+const BUCKET_NAME = 'wxpay-secrets'
+const BLOB_KEY = 'apiclient_key.pem'
 const CACHE_TTL_MS = 60_000
 
-/** 模块级缓存：避免每请求都打 KV */
+/** 模块级缓存：避免每请求都打 Blob */
 let cachedEnv: WxPayEnv | null = null
 let cachedAt = 0
+/** 上次 Blob 错误信息，用于诊断返回 */
+let lastBlobError: string | null = null
 
-/** 从 context.env + KV namespace 拼出完整 WxPayEnv */
+/** 从 context.env + Blob Storage 拼出完整 WxPayEnv */
 async function loadWxPayEnv(rawEnv: Record<string, any>): Promise<WxPayEnv> {
-  // 从 KV 拿私钥
-  const kv = rawEnv[KV_VAR_NAME] as EdgeOneKV | undefined
+  // 从 Blob 拿私钥
   let privateKey = ''
-  if (kv && typeof kv.get === 'function') {
-    try {
-      const got = await kv.get(PEM_KEY, { type: 'text' })
-      privateKey = typeof got === 'string' ? got : ''
-    } catch (e) {
-      console.error('[pay/create-order] KV get failed:', e)
-    }
+  try {
+    const store = getStore(BUCKET_NAME)
+    const got = await store.get(BLOB_KEY, { type: 'text' })
+    privateKey = typeof got === 'string' ? got : ''
+    lastBlobError = null
+  } catch (e: any) {
+    lastBlobError = String(e?.message || e)
+    console.error('[pay/create-order] Blob get failed:', e)
   }
 
   return {
@@ -118,22 +120,21 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
     }
     const { productId } = body
 
-    // 2. env 校验（含 KV 私钥）
+    // 2. env 校验（含 Blob 私钥）
     const env = await getEnvWithCache(context.env as any)
     const missing = (Object.entries(env) as [string, string | undefined][])
       .filter(([_, v]) => !v)
       .map(([k]) => k)
     if (missing.length) {
-      // 加 KV 诊断信息
-      const kv = (context.env as any)[KV_VAR_NAME]
       return jsonResponse(
         {
           error:
             `Missing WECHAT_* env: ${missing.join(', ')}. ` +
-            `检查：1) 控制台 6 个 WECHAT_* env 是否齐；2) KV namespace 是否绑到 one2agi 项目，变量名是否填 ${KV_VAR_NAME}；3) KV key ${PEM_KEY} 是否已 put PEM。`,
-          kvDiag: {
-            kvBindingPresent: !!kv,
-            kvGetMethod: kv ? typeof kv.get : 'N/A',
+            `检查：1) 控制台 5 个非敏感 WECHAT_* env 是否齐；2) Blob bucket ${BUCKET_NAME} 是否已创建；3) 对象 ${BLOB_KEY} 是否已上传 PEM 内容。`,
+          blobDiag: {
+            bucket: BUCKET_NAME,
+            objectKey: BLOB_KEY,
+            lastBlobError,
             cachedEnvPresent: !!cachedEnv,
             cachedAgeMs: cachedAt ? Date.now() - cachedAt : null
           }
@@ -147,7 +148,7 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
     if (!pem.includes('PRIVATE KEY')) {
       return jsonResponse(
         {
-          error: 'KV 里的值不含 "PRIVATE KEY" 字符串。是不是贴错了文件（贴成证书 / 公钥 / 其他格式）？',
+          error: 'Blob 里的值不含 "PRIVATE KEY" 字符串。是不是上传错了文件（证书 / 公钥 / 其他格式）？',
           diag: {
             length: pem.length,
             first60: pem.slice(0, 60),
@@ -162,7 +163,7 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
     if (!pem.startsWith('-----BEGIN PRIVATE KEY-----')) {
       return jsonResponse(
         {
-          error: 'KV 里的私钥 header 不是 "-----BEGIN PRIVATE KEY-----"。微信支付 V3 要求 PKCS#8 格式（不带 RSA/EC 前缀）。',
+          error: 'Blob 里的私钥 header 不是 "-----BEGIN PRIVATE KEY-----"。微信支付 V3 要求 PKCS#8 格式（不带 RSA/EC 前缀）。',
           diag: {
             length: pem.length,
             first60: pem.slice(0, 60),
