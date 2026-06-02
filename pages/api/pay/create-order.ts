@@ -4,11 +4,31 @@ import { products } from '@/products.config'
 import wechatpayConfig from '@/wechatpay.config'
 
 /**
- * POST /api/pay/create-order
+ * POST /api/pay/create-order（Next.js Pages Router 风格）
  *
- * MVP 写死：始终用 products[0]（即 1 分钱测试商品）。
- * 后续要支持多 SKU 时，从 req.body.productId 查 products 数组即可。
+ * ⚠️ **dead code**：yarn export 静态模式下不打包。本文件保留只为：
+ *   1. 兼容未来切回 yarn build（动态）
+ *   2. 方便本地 dev 调试
+ *
+ * 当前生产路径走的是 `cloud-functions/api/pay/create-order.ts`（Cloud Functions 风格）。
  */
+
+/** 从 process.env 拼出 lib/wechatpay.js 需要的 env 对象 */
+function readWxPayEnv() {
+  return {
+    WECHAT_APPID: process.env.WECHAT_APPID || wechatpayConfig.WECHAT_APPID,
+    WECHAT_MCHID: process.env.WECHAT_MCHID || wechatpayConfig.WECHAT_MCHID,
+    WECHAT_SERIAL_NO:
+      process.env.WECHAT_SERIAL_NO || wechatpayConfig.WECHAT_SERIAL_NO,
+    WECHAT_NOTIFY_URL:
+      process.env.WECHAT_NOTIFY_URL || wechatpayConfig.WECHAT_NOTIFY_URL,
+    WECHAT_API_V3_KEY:
+      process.env.WECHAT_API_V3_KEY || wechatpayConfig.WECHAT_API_V3_KEY,
+    WECHAT_PRIVATE_KEY: process.env.WECHAT_PRIVATE_KEY || '',
+    WECHAT_PRIVATE_KEY_PATH: process.env.WECHAT_PRIVATE_KEY_PATH || ''
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -30,15 +50,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 商户订单号：时间戳 + 6 位随机串，避免重复
     const outTradeNo = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-    // MVP 不接回调，notify_url 用占位值。后续接入 notify 时换成真实公网 URL。
-    const notifyUrl =
-      process.env.WECHAT_NOTIFY_URL || wechatpayConfig.WECHAT_NOTIFY_URL
+    // env 注入
+    const env = readWxPayEnv()
+    const notifyUrl = env.WECHAT_NOTIFY_URL
 
     const { codeUrl } = await createNativeOrder({
       outTradeNo,
       description: product.name,
       totalFen: product.price,
-      notifyUrl
+      notifyUrl,
+      env
     })
 
     return res.status(200).json({
