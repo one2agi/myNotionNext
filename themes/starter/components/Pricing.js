@@ -133,7 +133,7 @@ export const Pricing = () => {
                     type='button'
                     onClick={() => setActiveProduct(paidProducts[0])}
                     className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
-                    立即购买
+                    立即支付
                   </button>
                 </div>
               </div>
@@ -180,7 +180,7 @@ export const Pricing = () => {
                     type='button'
                     onClick={() => setActiveProduct(paidProducts[1])}
                     className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
-                    立即购买
+                    立即支付
                   </button>
                 </div>
               </div>
