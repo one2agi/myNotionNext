@@ -1,3 +1,5 @@
+// @ts-nocheck  (项目没装 @types/jest，jest.MockedFunction / describe / expect 等类型缺失，运行时由 jest 提供)
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
 /**
  * cloud-functions/api/pay/create-order.ts — 集成测试（TDD Red 阶段）
  *
