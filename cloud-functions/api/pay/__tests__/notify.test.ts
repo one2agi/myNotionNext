@@ -201,4 +201,34 @@ describe('pay/notify', () => {
       expect(alreadyPaid).not.toHaveBeenCalled()
     })
   })
+
+  describe('onRequestGet — out_trade_no 缺失', () => {
+    it('回调 params 缺 out_trade_no → 400 + 不调 markPaid/alreadyPaid（防 markPaid(undefined, ...) 触发金额校验崩溃）', async () => {
+      // 背景:tsconfig 启用了 noUncheckedIndexedAccess,Record<string, string> 的
+      // params.out_trade_no 类型是 string | undefined。修复前 TS2345 编译失败,
+      // 运行时 markPaid(undefined, ...) 会让 notify 链路 100% 失败。
+      // 跟 query-order.ts 缺 outTradeNo 返 400 一致。
+      // 必须 set verifySign=true 让代码路径走到 outTradeNo 那行（否则假阳性:
+      // verifySign 返 undefined → !undefined=true → 提前返 400 'sign error'）
+      verifySign.mockReturnValue(true)
+      const paramsWithoutOutTradeNo: Record<string, string> = {
+        pid: 'test-pid',
+        type: 'wxpay',
+        // out_trade_no 故意缺失 — 模拟 Z-Pay 字段缺失或恶意构造
+        name: 'product',
+        money: '0.10',
+        trade_status: 'TRADE_SUCCESS',
+        trade_no: 'ZPAYTEST123',
+        sign: 'mock-sign',
+        sign_type: 'MD5',
+      }
+
+      const response = await onRequestGet({ request: makeGetRequest(paramsWithoutOutTradeNo), env })
+      const text = await response.text()
+
+      expect(response.status).toBe(400)
+      expect(markPaid).not.toHaveBeenCalled()
+      expect(alreadyPaid).not.toHaveBeenCalled()
+    })
+  })
 })

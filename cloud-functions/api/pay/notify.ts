@@ -33,13 +33,20 @@ async function readParams(request: Request, isPost: boolean): Promise<Record<str
 
 async function handle(request: Request, env: Record<string, string>, isPost: boolean): Promise<Response> {
   const params = await readParams(request, isPost)
+  // 早返:out_trade_no 缺失（tsconfig noUncheckedIndexedAccess 让 params.out_trade_no
+  // 类型是 string | undefined，传给 markPaid / alreadyPaid 会触发 TS2345；运行时
+  // markPaid(undefined, ...) 会让金额校验 100% 失败）。
+  // 跟 query-order.ts 缺 outTradeNo 返 400 一致。
+  const outTradeNo = params.out_trade_no
+  if (!outTradeNo) {
+    return new Response('bad request', { status: 400 })
+  }
   if (!verifySign(params, env.ZPAY_KEY)) {
     return new Response('sign error', { status: 400 })
   }
   if (params.trade_status !== 'TRADE_SUCCESS') {
     return new Response('success')
   }
-  const outTradeNo = params.out_trade_no
   if (alreadyPaid(outTradeNo)) {
     return new Response('success')
   }
