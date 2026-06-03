@@ -23,12 +23,6 @@ jest.mock('../../../../lib/zpay.js', () => ({
   createNativeOrder: jest.fn(),
 }))
 
-// 旧 create-order.ts 顶部 import '@edgeone/pages-blob'，新实现删掉这个 import 后这个 mock 也不需要
-// （保留无副作用，纯粹是 test-runner compatibility 兜底）
-jest.mock('@edgeone/pages-blob', () => ({
-  getStore: jest.fn(),
-}))
-
 // jsdom env 缺 Response / TextEncoder。
 // 写一个 minimal Response polyfill（项目不允许加新依赖；undici 也没装）。
 // handler 用法是 new Response(body, {status, headers}) + .json() / .status
