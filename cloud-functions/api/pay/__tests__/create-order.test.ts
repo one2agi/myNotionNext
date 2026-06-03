@@ -23,6 +23,17 @@ jest.mock('../../../../lib/zpay.js', () => ({
   createNativeOrder: jest.fn(),
 }))
 
+// 关键：jest.mock 路径 = 从测试文件位置到被 mock 模块的相对路径
+// 测试文件: cloud-functions/api/pay/__tests__/create-order.test.ts
+// 目标模块: lib/order-store.js
+// 相对路径: ../../../lib/order-store.js（与 lib/zpay.js 同级）
+// 背景: lib/order-store.recordOrder 在 notify.ts 链路上被 markPaid / alreadyPaid
+// 读 store.get(outTradeNo) 命中已存在记录才能做金额比对；create-order 必须先
+// 调 recordOrder(outTradeNo, product.price) 落单，否则 notify 100% 失败。
+jest.mock('../../../../lib/order-store.js', () => ({
+  recordOrder: jest.fn(),
+}))
+
 // jsdom env 缺 Response / TextEncoder。
 // 写一个 minimal Response polyfill（项目不允许加新依赖；undici 也没装）。
 // handler 用法是 new Response(body, {status, headers}) + .json() / .status
@@ -50,9 +61,12 @@ const { TextEncoder, TextDecoder } = require('util')
 // 必须 import 完 mock 才能 import 被测模块（jest 自动 hoist jest.mock，但显式 import 在前更易读）
 import { onRequestPost } from '../create-order'
 import { createNativeOrder } from '../../../../lib/zpay.js'
+import { recordOrder } from '../../../../lib/order-store.js'
 
 const mockedCreateNativeOrder =
   createNativeOrder as jest.MockedFunction<typeof createNativeOrder>
+
+const mockedRecordOrder = recordOrder as unknown as jest.Mock
 
 const FULL_ENV = {
   ZPAY_PID: 'test-pid-12345',
@@ -79,6 +93,7 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
   beforeEach(() => {
     // 每个 case 前重置 mock 状态（jest.setup.js 的 clearMocks 也会清，但显式更清晰）
     mockedCreateNativeOrder.mockReset()
+    mockedRecordOrder.mockReset()
   })
 
   it('1. 正常下单: env 完整 + starter-full (10 分) → 200 + 完整字段 + money "0.10" 元 + name 是商品名', async () => {
@@ -162,5 +177,33 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     const body = await readJson(response)
     expect(body.error).toMatch(/free|unpaid/i)
     expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
+  })
+
+  it('5. 落单: 调 createNativeOrder 前先 recordOrder(outTradeNo, product.price=10) 给 notify 金额校验用', async () => {
+    // 回归测试:防 F1 CRITICAL（漏调 recordOrder 导致 notify 金额校验全失效）
+    // notify.ts 内部 markPaid → store.get(outTradeNo) 必须命中已存在记录才能做金额比对，
+    // 因此 create-order 必须先 recordOrder(outTradeNo, product.price) 落单。
+    mockedCreateNativeOrder.mockResolvedValue({
+      outTradeNo: 'mock-123',
+      tradeNo: 'ZPAY456',
+      qrcode: 'weixin://wxpay/bizpayurl?pr=MOCK',
+      imgUrl: 'https://zpayz.cn/qrcode/mock.jpg',
+      payurl: 'https://zpayz.cn/pay/wxpay/MOCK/',
+    })
+
+    const request = makeRequest({ productId: 'starter-full' })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(200)
+    const body = await readJson(response)
+    expect(mockedRecordOrder).toHaveBeenCalledTimes(1)
+    // 关键断言:recordOrder 的 outTradeNo 必须跟响应里返的 outTradeNo 一致
+    //（即 create-order 内部生成的同一 outTradeNo 被同时用于落单和返 200）
+    // + 第二参数必须是 product.price 的整数值 10（starter-full）
+    expect(mockedRecordOrder).toHaveBeenCalledWith(body.outTradeNo, 10)
   })
 })

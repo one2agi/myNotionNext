@@ -42,6 +42,11 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
       )
     }
     const outTradeNo = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    // 关键落单：notify.ts 的 markPaid 内部要 store.get(outTradeNo) 命中已存在记录
+    // 才能做金额比对；不调 recordOrder → notify 100% 报 amount mismatch。
+    // recordOrder 是同步函数，直接调（不 await）。
+    const { recordOrder } = await import('../../../lib/order-store.js')
+    recordOrder(outTradeNo, product.price)
     const { createNativeOrder } = await import('../../../lib/zpay.js')
     const { qrcode, imgUrl } = await createNativeOrder({
       outTradeNo,
