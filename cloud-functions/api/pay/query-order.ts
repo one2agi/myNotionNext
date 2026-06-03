@@ -16,7 +16,7 @@ export async function onRequestGet({ request, env }: { request: Request; env: Re
       headers: { 'Content-Type': 'application/json; charset=UTF-8' }
     })
   }
-  const data = await queryOrder({ outTradeNo, env })
+  const data = await queryOrder({ outTradeNo, env: env as any })
   return new Response(JSON.stringify({
     status: data.status,
     money: data.money,
