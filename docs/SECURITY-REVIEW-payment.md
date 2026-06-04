@@ -228,7 +228,7 @@
       mismatch'）。F1 没修这条必失败
 - [ ] W2 建议修: `query-order.ts` 包 try/catch，失败返 `{status: 0}`
 - [ ] W3 建议确认: 查 z-pay.cn 文档，clientip 字段是否必填
-- [ ] W4 决定: `zpay.config.js` 保留（加注释解释）或 `git rm`
+- [x] W4: `zpay.config.js` 已 `git rm`（commit: chore cleanup，ARCHITECTURE-payment.md 同步移除引用）
 - [ ] 用户前置条件 1: EdgeOne 控制台**删** 6 个 WECHAT_* + BLOB_BOOTSTRAP_TOKEN，
       **加** ZPAY_PID / ZPAY_KEY / ZPAY_NOTIFY_URL
 - [ ] 用户前置条件 2: EdgeOne 控制台**删** Blob bucket `wxpay-secrets`

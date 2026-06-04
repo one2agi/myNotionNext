@@ -1,6 +1,6 @@
 # 支付接入架构
 
-> 📋 本文档是支付接入的架构参考。完整迁移方案（含决策过程 / trade-off / 验证步骤）见 `/home/morav/.claude/plans/appid-tingly-koala.md`。
+> 📋 本文档是支付接入的架构参考。详细 commit 历史见 `git log --grep="pay" --oneline`（含决策过程 / trade-off / 验证步骤）。
 
 ## 1. 概述
 
@@ -71,7 +71,7 @@ NotionNext 项目的收费流程由前端 PayModal 发起，经 EdgeOne Pages Cl
 | 修改 | `themes/starter/components/Pricing.js` | 按钮文案 "立即购买" → "立即支付" |
 | 修改 | `package.json` | 删 `@edgeone/pages-blob` + 删 `qrcode` |
 | 修改 | `products.config.js` | 顶部注释更新（内部金额单位仍为"分"） |
-| 重命名 | `wechatpay.config.js` → `zpay.config.js` | `git mv` + 内部内容整体替换 |
+| 删除 | `zpay.config.js` | 仅 ZPAY_PID 占位文件，从未 import（已 `git rm`） |
 | 删除 | `lib/wechatpay.js` | 整文件 |
 | 删除 | `cloud-functions/api/_internal/populate-blob.ts` | 一次性 bootstrap 端点（含整个 `_internal/`） |
 | 删除 | `pages/api/pay/create-order.ts` | dead code（含整个 `pages/api/pay/`） |
@@ -133,7 +133,7 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 - **MD5 签名**：参数按 ASCII 排序拼接 `a=b&c=d + KEY`，**排除** `sign` / `sign_type` / 空值，**小写**输出。验签时用相同算法重算比对。**不要**对参数做 URL 编码（Z-Pay 文档明确）。
 - **金额校验**：防伪造回调。`order-store` 在 create-order 落单时记录 `outTradeNo → priceFen`，notify 时反查比对 Z-Pay 回调的 `money`（元）× 100 vs 记录的 `priceFen`（分）。不匹配返 400 不 `markPaid`。
 - **幂等**：无 DB，内存 `Map<outTradeNo, {amountFen, paid, notifiedAt}>`，60 分钟 TTL，每次访问惰性清理。**接受**容器重启导致多发一次"成功"事件（钱在 Z-Pay 端已落，不重扣），要严格持久化需接 DB。
-- **ZPAY_KEY 永远走 env**：不进入 git（`.env*` 在 `.gitignore`），不进入前端 bundle，不进入 `zpay.config.js`（该文件只放 `ZPAY_PID` 占位）。前端通过 `query-order` 代理访问，永远不直接接触 KEY。
+- **ZPAY_KEY 永远走 env**：不进入 git（`.env*` 在 `.gitignore`），不进入前端 bundle，不进入任何 git 跟踪配置文件。前端通过 `query-order` 代理访问，永远不直接接触 KEY。
 - **回调 URL 必须公网 HTTPS**：Z-Pay 通知不到 localhost 或内网 IP。
 
 ## 6. 部署 / 运维
@@ -159,7 +159,7 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 - `ZPAY_NOTIFY_URL` — 回调地址（必须公网 HTTPS）
 - `ZPAY_RETURN_URL`（可选）— 支付完成后跳转地址
 
-**优先级**（后端内部统一）：`context.env.X` > `zpay.config.js` 字面量。**KEY 永远只走 env**。
+**优先级**（后端内部统一）：`context.env.X` > 任何字面量配置。**KEY 永远只走 env**。
 
 ### 6.3 验证步骤
 
@@ -183,6 +183,6 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 
 ## 8. 参考
 
-- 完整迁移方案：`/home/morav/.claude/plans/appid-tingly-koala.md`（含决策记录、风险评估、阶段 A-D 详细步骤）
+- 完整迁移方案：见 git 历史（`git log --grep="pay" --oneline`），含决策记录、风险评估、阶段 A-D 详细步骤。
 - Z-Pay 官方文档：https://z-pay.cn/doc.html
 - 微信支付 V3 文档（历史）：https://pay.weixin.qq.com/wiki/doc/apiv3/（保留作为"为什么我们迁走了"的历史参考）
