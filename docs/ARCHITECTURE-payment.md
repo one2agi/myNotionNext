@@ -71,10 +71,8 @@ NotionNext 项目的收费流程由前端 PayModal 发起，经 EdgeOne Pages Cl
 | 修改 | `themes/starter/components/Pricing.js` | 按钮文案 "立即购买" → "立即支付" |
 | 修改 | `package.json` | 删 `@edgeone/pages-blob` + 删 `qrcode` |
 | 修改 | `products.config.js` | 顶部注释更新（内部金额单位仍为"分"） |
-| 删除 | `zpay.config.js` | 仅 ZPAY_PID 占位文件，从未 import（已 `git rm`） |
-| 删除 | `lib/wechatpay.js` | 整文件 |
-| 删除 | `cloud-functions/api/_internal/populate-blob.ts` | 一次性 bootstrap 端点（含整个 `_internal/`） |
-| 删除 | `pages/api/pay/create-order.ts` | dead code（含整个 `pages/api/pay/`） |
+
+> 历史清理记录（已完成）：`zpay.config.js`、`lib/wechatpay.js`、`cloud-functions/api/_internal/`、`pages/api/pay/` 均已在迁移期间 `git rm`。
 
 ## 4. 数据流
 
@@ -138,26 +136,30 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 
 ## 6. 部署 / 运维
 
-### 6.1 前置条件（用户必做）
+### 6.1 前置条件 / 一次性配置（迁移期已完成）
 
-| # | 动作 | 位置 |
+| # | 动作 | 状态 |
 |---|------|------|
-| 1 | EdgeOne 控制台**删** 6 个 `WECHAT_*` + `BLOB_BOOTSTRAP_TOKEN`，**加** 3-4 个 `ZPAY_*` | EdgeOne → 环境变量 |
-| 2 | EdgeOne 控制台**删** Blob bucket `wxpay-secrets` | EdgeOne → 存储 → Blob |
-| 3 | Z-Pay 商户后台填 `notify_url` = `https://<你的域名>/api/pay/notify` | z-pay.cn member 后台 |
-| 4 | （可选）把 `products.config.js` 价格从测试金额（10/30 分）改回真实价格 | 仓库 |
+| 1 | EdgeOne 控制台清掉 6 个 `WECHAT_*` + `BLOB_BOOTSTRAP_TOKEN`，加 3 个 `ZPAY_*` | ✅ 完成（2026-06-04） |
+| 2 | EdgeOne 控制台删 Blob bucket `wxpay-secrets`（旧 V3 私钥载体） | ⚠️ 待控制台核实（CLI 无 Blob 子命令） |
+| 3 | Z-Pay 商户后台填 `notify_url` = `https://www.one2agi.com/api/pay/notify` | ✅ 完成（生产已收款） |
+| 4 | （可选）把 `products.config.js` 价格从测试金额（10/30 分）改回真实价格 | ⏳ 暂不改 |
+| 5 | 微信支付商户平台轮换 V3 API key（git 历史曾泄露） | ✅ 完成（2026-06-06） |
+| 6 | `git filter-repo --path wechatpay.config.js --invert-paths` 清 history | ⏳ 计划中 |
 
 > **注意**：EdgeOne Pages 部署 Next.js 项目**只支持静态导出**（`yarn export`），不要改 build 命令。`cloud-functions/` 是平台层独立部署的，不受 build 模式影响。
 
-### 6.2 env 替换表
+### 6.2 env 当前状态
 
-**删除（7 个）**：`WECHAT_APPID` / `WECHAT_MCHID` / `WECHAT_SERIAL_NO` / `WECHAT_NOTIFY_URL` / `WECHAT_API_V3_KEY` / `WECHAT_PRIVATE_KEY` / `WECHAT_PRIVATE_KEY_PATH` / `BLOB_BOOTSTRAP_TOKEN`
-
-**新增（3-4 个）**：
+**当前生产 env（3 个 ZPAY_* 已生效）**：
 - `ZPAY_PID` — Z-Pay 商户 ID
 - `ZPAY_KEY` — **只走 env**，绝不进 git
 - `ZPAY_NOTIFY_URL` — 回调地址（必须公网 HTTPS）
-- `ZPAY_RETURN_URL`（可选）— 支付完成后跳转地址
+
+**可选**：
+- `ZPAY_RETURN_URL` — 支付完成后跳转地址
+
+**已废弃**（迁移期已从控制台移除）：`WECHAT_APPID` / `WECHAT_MCHID` / `WECHAT_SERIAL_NO` / `WECHAT_NOTIFY_URL` / `WECHAT_API_V3_KEY` / `WECHAT_PRIVATE_KEY` / `WECHAT_PRIVATE_KEY_PATH` / `BLOB_BOOTSTRAP_TOKEN`
 
 **优先级**（后端内部统一）：`context.env.X` > 任何字面量配置。**KEY 永远只走 env**。
 

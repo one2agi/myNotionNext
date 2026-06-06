@@ -25,24 +25,25 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
+.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
-.env
 
 # vercel
 .vercel
 
-# edgeone
+# Tencent Cloud EdgeOne
 .edgeone
+.edgeone/*
+.tef_dist/*
 
 # dev
 /data.json
 /pnpm-lock.yaml
 .idea
 .vscode
-
 
 # sitemap
 /public/robots.txt
@@ -55,12 +56,8 @@ package-lock.json
 # yarn.lock
 
 .notion-api-lock
-# Tencent Cloud EdgeOne
-.env
-.edgeone/*
-.tef_dist/*
 
 # Test/build artifacts
 test-results/
 *.tsbuildinfo
-  
+tmp/
