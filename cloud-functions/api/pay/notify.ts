@@ -47,7 +47,7 @@ async function writeNotionPage(outTradeNo: string, moneyYuan: string, env: Recor
   if (!notionToken || !databaseId) return
 
   const order = getOrder(outTradeNo)
-  const ci = order?.customerInfo ?? { name: '', email: '', discountCode: undefined, partnerName: undefined }
+  const ci = order?.customerInfo ?? { name: '', email: '', discountCode: undefined, partnerName: undefined, productName: '' }
 
   const payload = {
     parent: { database_id: databaseId },
