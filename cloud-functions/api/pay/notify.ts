@@ -36,6 +36,48 @@ async function readParams(request: Request, isPost: boolean): Promise<Record<str
 }
 
 /**
+ * 从原始 query string 提取 sign（不经过 URL decode）
+ * Z-Pay 签名用的是 URL 编码后的字符串，auto-decoding 会导致验签失败
+ */
+function extractSignRaw(request: Request): string | null {
+  const url = new URL(request.url)
+  const raw = url.search.slice(1) // 去掉 '?'
+  const params = new URLSearchParams(raw)
+  return params.get('sign')
+}
+
+/**
+ * 用原始 query string 重新计算签名来验证（避免 URL decode 破坏中文/特殊字符）
+ * GET 请求专用
+ */
+function verifySignRaw(request: Request, key: string): boolean {
+  const url = new URL(request.url)
+  const raw = url.search.slice(1) // 去掉 '?'
+  if (!raw) return false
+
+  // 从 raw query string 直接提取 sign
+  const signMatch = raw.match(/sign=([^&]+)/)
+  if (!signMatch) return false
+  const receivedSign = signMatch[1]
+
+  // 用 URLSearchParams 解析（自动 URL decode），再按 key 升序排列后拼接
+  const params = new URLSearchParams(raw)
+  const pairs: string[] = []
+  const keys = Array.from(params.keys()).sort()
+  for (const k of keys) {
+    if (k === 'sign' || k === 'sign_type') continue
+    const v = params.get(k)
+    if (!v) continue
+    // 直接用解码后的值（不用 re-encode）— Z-Pay 签名时 name=原始中文
+    pairs.push(`${k}=${v}`)
+  }
+  const signData = pairs.join('&') + key
+  const expected = crypto.createHash('md5').update(signData).digest('hex')
+  if (expected.length !== receivedSign.length) return false
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(receivedSign))
+}
+
+/**
  * H-5 简化: 直接写 Notion 订单页 (砍 Workers 层)
  * POST https://api.notion.com/v1/pages
  * 2.5s AbortController (G3 修复: EdgeOne 3s 超时, 留 0.5s buffer)
@@ -108,10 +150,17 @@ async function handle(request: Request, env: Record<string, string>, isPost: boo
   if (!outTradeNo || !money) {
     return new Response('bad request', { status: 400 })
   }
-  // TODO: 临时关闭验签，debug 后恢复
-  // if (!verifySign(params, env.ZPAY_KEY)) {
-  //   return new Response('sign error', { status: 400 })
-  // }
+  // GET 请求：用原始 query string 验签（避免 URL decode 破坏中文签名）
+  // POST 请求：用已解码的 form data 验签（Z-Pay POST SDK 自动编码）
+  if (isPost) {
+    if (!verifySign(params, env.ZPAY_KEY)) {
+      return new Response('sign error', { status: 400 })
+    }
+  } else {
+    if (!verifySignRaw(request, env.ZPAY_KEY)) {
+      return new Response('sign error', { status: 400 })
+    }
+  }
   if (params.trade_status !== 'TRADE_SUCCESS') {
     return new Response('success')
   }
