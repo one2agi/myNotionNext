@@ -61,3 +61,6 @@ package-lock.json
 test-results/
 *.tsbuildinfo
 tmp/
+
+# MCP server config (含 NOTION_TOKEN 等 secrets,不入 git)
+.mcp.json
