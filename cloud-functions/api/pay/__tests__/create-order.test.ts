@@ -105,7 +105,7 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
       payurl: 'https://zpayz.cn/pay/wxpay/MOCK/',
     })
 
-    const request = makeRequest({ productId: 'starter-full' })
+    const request = makeRequest({ productId: 'starter-full', customer: { name: '张三', email: 'a' + '@' + 'b.com' } })
     const response = await onRequestPost({
       request,
       env: FULL_ENV,
@@ -131,14 +131,14 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     expect(mockedCreateNativeOrder).toHaveBeenCalledTimes(1)
     const call = mockedCreateNativeOrder.mock.calls[0][0] as any
     expect(call.money).toBe('0.10') // 分 → 元 字符串, 2 位小数
-    expect(call.name).toBe('知行合一 · 完整版') // 短商品名, 127 截断不生效
+    expect(call.name).toBe('知行合一 · 完整版-张三') // H-4: 拼接 customer.name
     expect(call.notifyUrl).toBe(FULL_ENV.ZPAY_NOTIFY_URL)
     expect(call.env.ZPAY_PID).toBe(FULL_ENV.ZPAY_PID)
     expect(call.env.ZPAY_KEY).toBe(FULL_ENV.ZPAY_KEY)
   })
 
   it('2. 缺 env: ZPAY_PID 为空 → 500 + error 含 "ZPAY_PID" + 不调 createNativeOrder', async () => {
-    const request = makeRequest({ productId: 'starter-full' })
+    const request = makeRequest({ productId: 'starter-full', customer: { name: '张三', email: 'a' + '@' + 'b.com' } })
     const response = await onRequestPost({
       request,
       env: { ...FULL_ENV, ZPAY_PID: '' },
@@ -152,7 +152,7 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
   })
 
   it('3. 商品未找到: productId "nonexistent" → 400 + error 含 "Unknown"/"not found" + 不调 createNativeOrder', async () => {
-    const request = makeRequest({ productId: 'nonexistent' })
+    const request = makeRequest({ productId: 'nonexistent', customer: { name: '张三', email: 'a' + '@' + 'b.com' } })
     const response = await onRequestPost({
       request,
       env: FULL_ENV,
@@ -166,7 +166,7 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
   })
 
   it('4. 商品免费: starter-free (price=0) → 400 + error 含 "free"/"unpaid" + 不调 createNativeOrder', async () => {
-    const request = makeRequest({ productId: 'starter-free' })
+    const request = makeRequest({ productId: 'starter-free', customer: { name: '张三', email: 'a' + '@' + 'b.com' } })
     const response = await onRequestPost({
       request,
       env: FULL_ENV,
@@ -191,7 +191,7 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
       payurl: 'https://zpayz.cn/pay/wxpay/MOCK/',
     })
 
-    const request = makeRequest({ productId: 'starter-full' })
+    const request = makeRequest({ productId: 'starter-full', customer: { name: '张三', email: 'a' + '@' + 'b.com' } })
     const response = await onRequestPost({
       request,
       env: FULL_ENV,
@@ -205,5 +205,173 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     //（即 create-order 内部生成的同一 outTradeNo 被同时用于落单和返 200）
     // + 第二参数必须是 product.price 的整数值 10（starter-full）
     expect(mockedRecordOrder).toHaveBeenCalledWith(body.outTradeNo, 10)
+  })
+})
+
+// =====================================================================
+// H-4 扩展: customer 必填校验 + discountCode 二次校验 + discountApplied 返参
+// 见 docs/PAYMENT-FORM-DESIGN.md §2.3 + §8.1 + plan Task 4
+// =====================================================================
+
+jest.mock('../../../../lib/discount-codes', () => ({
+  lookupDiscount: jest.fn(),
+  DiscountNotFoundError: class extends Error {
+    code = 'E_DC_NOT_FOUND'
+    constructor(public discountCode: string) {
+      super(`Discount code not found: ${discountCode}`)
+    }
+  },
+  DiscountDisabledError: class extends Error {
+    code = 'E_DC_DISABLED'
+    constructor(public discountCode: string) {
+      super(`Discount code disabled: ${discountCode}`)
+    }
+  },
+}))
+
+import {
+  lookupDiscount,
+  DiscountNotFoundError,
+  DiscountDisabledError,
+} from '../../../../lib/discount-codes'
+
+const mockedLookupDiscount = lookupDiscount as jest.MockedFunction<typeof lookupDiscount>
+
+describe('onRequestPost (create-order) — H-4 customer + discount', () => {
+  beforeEach(() => {
+    mockedCreateNativeOrder.mockReset()
+    mockedRecordOrder.mockReset()
+    mockedLookupDiscount.mockReset()
+    // 默认 mock: 未命中抛 DiscountNotFoundError (代表 lib 内部 validateFormat 拒绝)
+    mockedLookupDiscount.mockImplementation((code: string) => {
+      throw new DiscountNotFoundError(code)
+    })
+  })
+
+  it('6. 客户必填: body 无 customer → 400 + code=E_NAME_EMPTY + 不调 createNativeOrder', async () => {
+    const request = makeRequest({ productId: 'starter-full' })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(400)
+    const body = await readJson(response)
+    expect(body.code).toBe('E_NAME_EMPTY')
+    expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
+    expect(mockedRecordOrder).not.toHaveBeenCalled()
+  })
+
+  it('7. 邮箱格式: customer.email="not-an-email" → 400 + code=E_EMAIL_INVALID + 不调 createNativeOrder', async () => {
+    const request = makeRequest({
+      productId: 'starter-full',
+      customer: { name: '张三', email: 'not-an-email' },
+    })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(400)
+    const body = await readJson(response)
+    expect(body.code).toBe('E_EMAIL_INVALID')
+    expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
+  })
+
+  it('8. 客户名空: customer.name="   " (whitespace only) → 400 + code=E_NAME_EMPTY', async () => {
+    const request = makeRequest({
+      productId: 'starter-full',
+      customer: { name: '   ', email: 'a' + '@' + 'b.com' },
+    })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(400)
+    const body = await readJson(response)
+    expect(body.code).toBe('E_NAME_EMPTY')
+    expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
+  })
+
+  it('9. 优惠码未匹配: discountCode="UNKNOWN" + lookupDiscount 抛 DiscountNotFoundError → 400 + code=E_DC_NOT_FOUND', async () => {
+    const request = makeRequest({
+      productId: 'starter-full',
+      customer: { name: '张三', email: 'a' + '@' + 'b.com' },
+      discountCode: 'UNKNOWN',
+    })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(400)
+    const body = await readJson(response)
+    expect(body.code).toBe('E_DC_NOT_FOUND')
+    expect(mockedLookupDiscount).toHaveBeenCalledWith('UNKNOWN')
+    expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
+  })
+
+  it('10. 优惠码已禁用: discountCode="PARTNER02" + lookupDiscount 抛 DiscountDisabledError → 400 + code=E_DC_DISABLED', async () => {
+    mockedLookupDiscount.mockImplementation(() => {
+      throw new DiscountDisabledError('PARTNER02')
+    })
+    const request = makeRequest({
+      productId: 'starter-full',
+      customer: { name: '张三', email: 'a' + '@' + 'b.com' },
+      discountCode: 'PARTNER02',
+    })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(400)
+    const body = await readJson(response)
+    expect(body.code).toBe('E_DC_DISABLED')
+    expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
+  })
+
+  it('11. 优惠码命中: discountCode="PARTNER01" + discountPct=0 → 200 + 返 discountApplied{code, partnerName, discountPct, originalFen}', async () => {
+    mockedLookupDiscount.mockReturnValue({
+      partnerName: '张三的数码店',
+      discountPct: 0,
+      disabled: false,
+    })
+    mockedCreateNativeOrder.mockResolvedValue({
+      outTradeNo: 'mock-123',
+      tradeNo: 'ZPAY456',
+      qrcode: 'weixin://wxpay/bizpayurl?pr=MOCK',
+      imgUrl: 'https://zpayz.cn/qrcode/mock.jpg',
+      payurl: 'https://zpayz.cn/pay/wxpay/MOCK/',
+    })
+
+    const request = makeRequest({
+      productId: 'starter-full',
+      customer: { name: '张三', email: 'a' + '@' + 'b.com' },
+      discountCode: 'PARTNER01',
+    })
+    const response = await onRequestPost({
+      request,
+      env: FULL_ENV,
+      params: {},
+    })
+
+    expect(response.status).toBe(200)
+    const body = await readJson(response)
+    expect(body.discountApplied).toEqual({
+      code: 'PARTNER01',
+      partnerName: '张三的数码店',
+      discountPct: 0,
+      originalFen: 10,
+    })
+    // discountPct=0 不变价,money 仍 0.10
+    const call = mockedCreateNativeOrder.mock.calls[0][0] as any
+    expect(call.money).toBe('0.10')
   })
 })

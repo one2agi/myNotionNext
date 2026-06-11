@@ -77,7 +77,7 @@ const ENV = {
 async function placeOrder(productId: string): Promise<string> {
   const req = new FakeRequest(
     'https://example.com/api/pay/create-order',
-    JSON.stringify({ productId })
+    JSON.stringify({ productId, customer: { name: 'E2E', email: 'e' + '@' + 'e.com' } })
   )
   const res = await createOrder({ request: req, env: ENV, params: {} } as any)
   expect(res.status).toBe(200)
