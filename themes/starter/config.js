@@ -96,7 +96,7 @@ const CONFIG = {
   STARTER_PRICING_2_HEADER: '包含内容',
   STARTER_PRICING_2_FEATURES:
     '完整八大模块,双币经济体系,五层复盘系统,想法实验室,健康管理,使用指南,永久更新',
-  STARTER_PRICING_2_BUTTON_TEXT: '即将上线',
+  STARTER_PRICING_2_BUTTON_TEXT: '立即支付',
   STARTER_PRICING_2_BUTTON_URL: '#',
 
   STARTER_PRICING_3_TAG: '',
@@ -107,7 +107,7 @@ const CONFIG = {
   STARTER_PRICING_3_HEADER: '包含内容',
   STARTER_PRICING_3_FEATURES:
     '完整模板包,7天启动指导（1v1）,首月复盘支持,不在模板里而在电话里的设计心法',
-  STARTER_PRICING_3_BUTTON_TEXT: '即将上线',
+  STARTER_PRICING_3_BUTTON_TEXT: '立即支付',
   STARTER_PRICING_3_BUTTON_URL: '#',
 
   // ===== TESTIMONIALS 用户测评 =====
