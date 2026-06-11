@@ -119,7 +119,7 @@ describe('notify.ts direct Notion API (H-5 simplified)', () => {
     expect(await res.text()).toBe('success')
   })
 
-  it('3. Notion API returns 500 → Sentry warning, still 200 to Z-Pay', async () => {
+  it('3. Notion API returns 500 → still 200 to Z-Pay (error logged, no Sentry in simplified H-5)', async () => {
     const mockRes = new FakeResponse('server error', { status: 500 })
     const mockFetch = jest.fn().mockResolvedValue(mockRes)
     ;(globalThis as any).fetch = mockFetch
@@ -128,10 +128,9 @@ describe('notify.ts direct Notion API (H-5 simplified)', () => {
 
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('success')
-    expect(mockCaptureMessage).toHaveBeenCalledTimes(1)
-    const [msg, level] = mockCaptureMessage.mock.calls[0] as [string, string]
-    expect(msg).toContain('E_NOTIFY_HTTP 500')
-    expect(level).toBe('warning')
+    // Sentry removed in simplified H-5 (no Sentry dependency), error goes to console.warn
+    // mockCaptureMessage should NOT be called
+    expect(mockCaptureMessage).not.toHaveBeenCalled()
   })
 
   it('4. markPaid false → not200 → no Notion fetch', async () => {

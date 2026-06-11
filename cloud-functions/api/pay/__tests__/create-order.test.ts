@@ -204,7 +204,8 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     // 关键断言:recordOrder 的 outTradeNo 必须跟响应里返的 outTradeNo 一致
     //（即 create-order 内部生成的同一 outTradeNo 被同时用于落单和返 200）
     // + 第二参数必须是 product.price 的整数值 10（starter-full）
-    expect(mockedRecordOrder).toHaveBeenCalledWith(body.outTradeNo, 10)
+    // H-4: recordOrder 现在传 3 个参数 (outTradeNo, finalPriceFen, customerInfo)
+    expect(mockedRecordOrder).toHaveBeenCalledWith(body.outTradeNo, 10, expect.objectContaining({ name: '张三', email: expect.any(String) }))
   })
 })
 
