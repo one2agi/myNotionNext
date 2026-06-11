@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>支付回调 → Notion 数据库 4 方案横向对比</title>
+<style>
+  :root{
+    --bg:#fbfaf7; --fg:#1a1a1a; --muted:#6a6a6a; --line:#e4e1d8;
+    --card:#ffffff; --accent:#2b5fd9; --ok:#0a7a3b; --warn:#a86b00; --bad:#a8281a;
+    --hl-current:#fff7d6; --hl-pick:#d9f3df;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans CN",
+                 "Noto Sans CJK SC", Roboto, sans-serif;
+    background:var(--bg); color:var(--fg); line-height:1.65;
+  }
+  .wrap{max-width:1240px; margin:0 auto; padding:32px 28px 80px}
+  h1{font-size:30px; margin:0 0 6px; letter-spacing:-.5px}
+  h2{font-size:22px; margin:48px 0 14px; padding-top:8px;
+     border-top:1px solid var(--line)}
+  h3{font-size:17px; margin:24px 0 8px}
+  h4{font-size:15px; margin:18px 0 6px; color:#333}
+  p{margin:0 0 12px}
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:"JetBrains Mono",Menlo,Consolas,monospace;
+       background:#f1ede2; padding:1px 6px; border-radius:3px; font-size:.92em}
+  .meta{color:var(--muted); font-size:13px; margin:0 0 24px}
+  .meta b{color:#444}
+
+  /* TOC */
+  .toc{
+    position:sticky; top:12px; z-index:5;
+    background:#fff; border:1px solid var(--line); border-radius:8px;
+    padding:14px 18px; margin:0 0 28px; font-size:14px;
+    box-shadow:0 2px 6px rgba(0,0,0,.04);
+  }
+  .toc h4{margin:0 0 8px; font-size:13px; text-transform:uppercase;
+          letter-spacing:.5px; color:#888}
+  .toc ol{margin:0; padding-left:22px; columns:2}
+  .toc li{margin:2px 0; break-inside:avoid}
+  .toc a{color:#333}
+
+  /* Boxes */
+  .box{border:1px solid var(--line); border-radius:8px; padding:18px 22px;
+       margin:16px 0; background:var(--card)}
+  .box-pick{background:var(--hl-pick); border-color:#7ec894}
+  .box-warn{background:#fff5e8; border-color:#e8b35a}
+  .box-info{background:#eef4ff; border-color:#a8c2ec}
+  .box b{color:#000}
+
+  /* Verdict pill */
+  .pill{display:inline-block; padding:2px 10px; border-radius:999px;
+        font-size:12px; font-weight:600; letter-spacing:.3px; vertical-align:middle}
+  .pill-ok{background:#ddf3e3; color:var(--ok)}
+  .pill-warn{background:#fde8c8; color:var(--warn)}
+  .pill-bad{background:#fadcd6; color:var(--bad)}
+  .pill-neutral{background:#e9e7df; color:#555}
+
+  /* Comparison table */
+  .table-scroll{overflow-x:auto; margin:12px 0 24px;
+                border:1px solid var(--line); border-radius:8px; background:#fff}
+  table{width:100%; border-collapse:collapse; font-size:14px;
+         min-width:920px}
+  th,td{border:1px solid var(--line); padding:12px 14px; text-align:left;
+        vertical-align:top}
+  thead th{background:#f4f1e8; font-weight:700; position:sticky; top:0}
+  tbody th{background:#faf8f1; font-weight:600; width:130px; white-space:nowrap}
+  .col-current{background:var(--hl-current)}
+  .col-pick{background:#f1faf3}
+  .row-dim td{padding:18px 14px}
+
+  ul{margin:6px 0 4px; padding-left:20px}
+  ul li{margin:3px 0}
+  .check{color:var(--ok); font-weight:700; margin-right:4px}
+  .cross{color:var(--bad); font-weight:700; margin-right:4px}
+  .qmark{color:var(--warn); font-weight:700; margin-right:4px}
+
+  /* Findings cards */
+  .finding{
+    border:1px solid var(--line); border-left:4px solid var(--accent);
+    border-radius:6px; background:#fff; padding:14px 18px; margin:14px 0;
+  }
+  .finding[data-conf=high]{border-left-color:#0a7a3b}
+  .finding .tag{font-size:11px; font-weight:700; letter-spacing:.4px;
+                text-transform:uppercase; color:var(--ok); margin-right:8px}
+  .finding p{margin:6px 0}
+  .finding .ev{background:#f6f3e9; padding:10px 12px; border-radius:4px;
+               font-size:13px; color:#333; margin-top:8px}
+  .finding .src{font-size:12px; color:var(--muted); margin-top:6px}
+  .finding .src a{color:#3a4a7a}
+
+  /* Sources list */
+  .src-list{columns:2; column-gap:32px; font-size:13px; padding:0; list-style:none}
+  .src-list li{break-inside:avoid; margin:4px 0}
+  .src-list .q{color:#777; font-family:monospace; font-size:11px; margin-right:6px}
+
+  footer{color:var(--muted); font-size:12px; text-align:center;
+         border-top:1px solid var(--line); margin-top:60px; padding-top:18px}
+
+  @media (max-width:720px){
+    .toc ol{columns:1}
+    .wrap{padding:20px 14px 60px}
+  }
+  @media print{
+    body{background:#fff}
+    .toc{display:none}
+    .table-scroll{overflow:visible; border:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>支付回调 → Notion 数据库 4 方案横向对比</h1>
+<p class="meta">
+  场景：<b>Z-Pay 同步回调（HMAC 验签）→ 写入 Notion 数据库</b>
+  · 定位：<b>个人开发者 / &lt; 1000 单/月 / 已在 EdgeOne 跑 notify.ts</b>
+  · 报告日期：<b>2026-06-10</b> · 关联项目：<code>myNotionNext</code>（Z-Pay 迁移 Option A 已上线，参见 <code>docs/ARCHITECTURE-payment.md</code>）
+</p>
+
+<div class="toc">
+  <h4>目录</h4>
+  <ol>
+    <li><a href="#summary">一句话结论</a></li>
+    <li><a href="#table">4 方案 × 3 维度 对比表</a></li>
+    <li><a href="#china">中国境内特定约束</a></li>
+    <li><a href="#reasons">推荐理由（3 条）</a></li>
+    <li><a href="#trigger">切换 trigger 条件</a></li>
+    <li><a href="#findings">8 条高置信度 Findings</a></li>
+    <li><a href="#gaps">未结问题 / 研究空白</a></li>
+    <li><a href="#sources">来源清单（27 条）</a></li>
+    <li><a href="#method">方法论 / 可信度说明</a></li>
+  </ol>
+</div>
+
+<div id="summary" class="box box-pick">
+  <h3 style="margin-top:0">🏆 一句话结论</h3>
+  <p style="font-size:15.5px">
+    <b>维持方案 4（EdgeOne Pages Cloud Function <code>notify.ts</code>）</b>，<b>不要迁移</b>。
+    4 方案都能完成技术上的"验签 + 写 Notion"，但方案 4 在你的当前定位下
+    综合经济性、价值、可维护性三维度最优——而且 4 个候选里
+    唯有方案 4 真正上线跑过、被安全审计过。
+  </p>
+  <p style="margin:0">
+    <span class="pill pill-ok">推荐：方案 4</span>
+    <span class="pill pill-neutral">次优：方案 3（Cloudflare Workers Free）</span>
+    <span class="pill pill-warn">不推荐：方案 1（自建 n8n）</span>
+    <span class="pill pill-warn">不推荐：方案 2（Make SaaS）</span>
+  </p>
+</div>
+
+<h2 id="table">1. 4 方案 × 3 维度 对比表</h2>
+
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+  <th style="width:120px">维度</th>
+  <th class="col-pick"><b>方案 4 ✅ 当前</b><br>EdgeOne Pages Cloud Function<br><code>notify.ts</code></th>
+  <th><b>方案 3</b><br>Cloudflare Workers Free<br>（notion-workers 范式）</th>
+  <th><b>方案 1</b><br>腾讯云 VPS 自建 n8n<br>（mainland）</th>
+  <th><b>方案 2</b><br>Make SaaS<br>（前 Integromat）</th>
+</tr>
+<tr>
+  <th></th>
+  <th>新架构已上线，5/30 收尾</th>
+  <th>成本最低，但境内 egress 未证实</th>
+  <th>无备案 7–20 天阻断</th>
+  <th>无免费 tier，付费即高门槛</th>
+</tr>
+</thead>
+<tbody>
+
+<tr class="row-dim">
+  <th>💰 经济性</th>
+  <td class="col-pick">
+    <ul>
+      <li><b>EdgeOne Pages 免费层</b>（含 Cloud Function）</li>
+      <li>0 元/月（已实际部署）</li>
+      <li>0 备案/SSL 隐性成本（Pages 自带证书）</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li><b>Free tier 10 万 req/天</b>、不限子请求数</li>
+      <li>0 元/月（&lt; 1000 单/月余量 &gt; 99.9%）</li>
+      <li>需绑定自定义域 → 触发备案讨论</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>VPS ¥24+/月 + n8n 自维护</li>
+      <li>域名<b>必须备案</b>（7–20 工作日）</li>
+      <li>80/443 端口未备案被直接封</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li><b>无永久免费 tier</b>，Core €10.59/月起</li>
+      <li>Operations 计费：1 单 ≈ 1–2 ops</li>
+      <li>1000 单/月 ≈ €5–10 / 月</li>
+    </ul>
+  </td>
+</tr>
+
+<tr class="row-dim">
+  <th>⚙️ 价值（功能 / 可靠性）</th>
+  <td class="col-pick">
+    <ul>
+      <li>Z-Pay 验签 + 金额校验 + 幂等已实现（<code>lib/zpay.js</code> + <code>lib/order-store.js</code>）</li>
+      <li>Cold start 100ms 级（Cloud Function）</li>
+      <li><b>Free 层无合同 SLA</b>（best-effort）</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>HMAC 验签 sub-ms，Notion POST 走子请求免费</li>
+      <li>Workers <b>不收子请求费</b>（关键利好）</li>
+      <li>境内 egress 到 notion.com 稳定性<b>未合同化</b></li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>n8n UI 配置即可，<b>可视化</b>加分</li>
+      <li>Webhook 偶发"睡死"社区报告</li>
+      <li>自己背 VPS 99.9%+ SLA</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>UI 编排，零代码</li>
+      <li>失败重试有可视化历史</li>
+      <li>境内访问 <code>make.com</code> 偶发超时</li>
+    </ul>
+  </td>
+</tr>
+
+<tr class="row-dim">
+  <th>🔧 可维护</th>
+  <td class="col-pick">
+    <ul>
+      <li>当前代码 0 工时增量</li>
+      <li>Notion API 升级：自家 TypeScript 编译报错即捕获</li>
+      <li>已过安全审计（<code>docs/SECURITY-REVIEW-payment.md</code>）</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>迁移 1–2 天写 worker.ts + wrangler 部署</li>
+      <li>调试：<code>wrangler tail --status=error --format=json</code></li>
+      <li>Notion API 升级：自家 TypeScript 编译报错即捕获</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>一次性：1–2 天装 n8n + 备案 + 配 workflow</li>
+      <li>运维：n8n 升级、SSL 续期、磁盘扩容</li>
+      <li>Notion API 升级：n8n 节点维护者责任</li>
+    </ul>
+  </td>
+  <td>
+    <ul>
+      <li>一次性：半天配 scenario</li>
+      <li>运维：SaaS 升级由 Make 负责</li>
+      <li>Notion API 升级：Make 团队背锅，延迟 2–8 周</li>
+    </ul>
+  </td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<p class="meta">
+证据厚度：方案 3、4 = 高（官方定价/限速/产品文档 + 实践者报告双覆盖）·
+方案 1 = 中（社区讨论多，但 2026 年 ICP 政策细节有"未完全证实"项）·
+方案 2 = 中（依赖二级博客的 pricing 截图，Make 官方页需登录）
+</p>
+
+<h2 id="china">2. 中国境内特定约束（高频被忽略）</h2>
+
+<div class="box box-warn">
+  <h4 style="margin-top:0">⚠️ 备案（ICP）是"非对称硬阻断"</h4>
+  <p>
+    <b>中国大陆腾讯云 VPS 在 80/443 端口解析到未备案域名时，运营商直接 RST。</b>
+    用非标端口是短期绕过，但 2025 年端口扫描执法已收紧。
+    备案周期 7–20 个工作日，<b>需要国内主体（个人备案已收紧）</b>。
+  </p>
+  <p style="margin:0">
+    <b>结论：方案 1（n8n on mainland VPS）= 备案阻断。改用腾讯云香港/海外节点可绕过备案，
+    但增加 &gt; 80ms 延迟到 Z-Pay 回源，付出与方案 3 类似的代价却少一个 Free 配额优势。</b>
+  </p>
+</div>
+
+<div class="box box-info">
+  <h4 style="margin-top:0">🌐 出境到 notion.com 的稳定性</h4>
+  <ul>
+    <li><b>EdgeOne Pages</b>：境内有 Tencent 自家边缘节点 + 走腾讯骨干网出境，相对最稳。</li>
+    <li><b>Cloudflare Workers</b>：境内走 Anycast，节点在 HK/东京/新加坡，<b>无合同 SLA 保障</b>，理论上偶发丢包/超时。</li>
+    <li><b>n8n self-host on HK 节点</b>：回源 Z-Pay（境外）≈ Workers；写 Notion 走境外，链路跟 Workers 接近。</li>
+    <li><b>Make SaaS</b>：触发源域名 <code>make.com</code> 偶尔被 GFW 干扰，回调写 Notion 走 Make 出口，链路过两步。</li>
+  </ul>
+  <p style="margin:0">
+    <b>结论：方案 4 在境内回源路径最短 + 自有骨干网，方案 3、n8n-on-HK、Make 都有"境外一跳"额外风险。</b>
+  </p>
+</div>
+
+<div class="box">
+  <h4 style="margin-top:0">🚦 Notion REST 3 req/s 限速（4 方案共同的工程问题）</h4>
+  <p>
+    Notion API 文档明文：<b>平均 3 req/s/连接</b>，突发允许；429 = 限速，529 = 过载，<b>两者均带 <code>Retry-After</code> 头</b>。
+    <code>POST /v1/pages</code> 是非幂等——重试一次会创建重复行。
+  </p>
+  <p style="margin:0">
+    <b>4 方案都必须实现：</b>①读 <code>Retry-After</code> ②指数退避 + 抖动 ③以 Z-Pay <code>trade_no</code> 作为 natural key 幂等去重。
+    这是<b>可行性门槛</b>，不是<b>差异化</b>——方案 4 的 <code>order-store.js</code> 已经满足；切到任何方案都要重做一遍。
+  </p>
+</div>
+
+<h2 id="reasons">3. 推荐理由（3 条）</h2>
+
+<div class="box box-pick">
+  <h4 style="margin-top:0">理由 ① — 沉没成本是真实成本</h4>
+  <p>
+    方案 4 是唯一<b>已上线、被 E2E 测试覆盖、被安全审计过的方案</b>。
+    切换到任意替代方案 = 至少 1–2 天迁移 + 重过安全审计 + 重新观察线上稳定性。
+    对 &lt; 1000 单/月、单价 ¥79–¥299 的产品，迁移 ROI 是<b>负数</b>。
+  </p>
+</div>
+
+<div class="box box-pick">
+  <h4 style="margin-top:0">理由 ② — 隐性成本让"便宜方案"不便宜</h4>
+  <p>
+    方案 1 的真实成本 = VPS + 备案 + SSL + n8n 升级 + 监控 + 备份，&gt; 5 项隐性支出，单价 ¥200+/月起。
+    方案 2 的真实成本 = 月费 + 流量 + Make 模板升级，€5–10/月起且无免费 tier。
+    方案 3 表面最便宜（0 元），但出境稳定性是隐性 SLA 风险。
+    <b>方案 4 = 0 元 + Pages 自带 SSL + 腾讯骨干网 + 已审计 = 隐性成本几乎为 0</b>。
+  </p>
+</div>
+
+<div class="box box-pick">
+  <h4 style="margin-top:0">理由 ③ — Notion API 升级背锅链最短</h4>
+  <p>
+    方案 1、2 依赖第三方维护者：n8n Notion 节点 / Make Notion module 升级滞后 2–8 周。
+    方案 3、4 写自己的 TypeScript：Notion SDK 升级时 <code>yarn tsc</code> 不通过就<b>立刻知道</b>。
+    项目当前的 TypeScript strict + CI 已经把这个回路走通，迁移 = 抛弃这条已经修好的回路。
+  </p>
+</div>
+
+<h2 id="trigger">4. 切换 Trigger 条件（什么时候该改）</h2>
+
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+  <th>信号</th>
+  <th>触发值</th>
+  <th>迁移到</th>
+  <th>预计工时</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <th>EdgeOne 丢回调</th>
+  <td>连续 2 个月 &gt; 0.1% 回调到达但 Z-Pay 报"未收到回执"</td>
+  <td><b>方案 3</b> Cloudflare Workers Free（成本不变 + 跨厂商冗余）</td>
+  <td>1–2 天</td>
+</tr>
+<tr>
+  <th>流程复杂度超 1 个步骤</th>
+  <td>需要：验签 → 写 Notion → 发邮件 → 调内部 API（≥ 3 步 + 条件分支）</td>
+  <td><b>方案 1</b> 腾讯云 HK 节点自建 n8n（避免备案 + 可视化编排）</td>
+  <td>2–3 天</td>
+</tr>
+<tr>
+  <th>单价 / 规模 / 多币种</th>
+  <td>开通订阅/打赏/海外支付 ≥ 2 渠道</td>
+  <td><b>方案 1'</b> n8n 抽象渠道 adapter，方案 4 写多个 notify.ts</td>
+  <td>2 周</td>
+</tr>
+<tr>
+  <th>合规/审计要求</th>
+  <td>企业用户要求 SOC2/ISO27001/可审计执行历史</td>
+  <td><b>方案 2</b> Make Enterprise（≥ $299/月）</td>
+  <td>3 天</td>
+</tr>
+<tr>
+  <th>Pages 配额触顶</th>
+  <td>&gt; 1 万单/月（理论上不会这么快）</td>
+  <td><b>方案 3</b> Workers（10 万 req/天）</td>
+  <td>1 天</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<p class="meta">
+当前 4 个 trigger 任何一个不满足时，<b>都该留在方案 4</b>。
+对个人开发者 / &lt; 1000 单/月 / 单一支付渠道 的定位，
+方案 4 的设计余量至少覆盖 12–24 个月。
+</p>
+
+<h2 id="findings">5. 8 条高置信度 Findings（带 URL）</h2>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F1 · high</span><b>Cloudflare Workers Free 不按子请求计费，覆盖 Z-Pay 回调轻松。</b></p>
+  <p>Free 层 10 万 req/天、每次调用 10 ms CPU；<code>fetch()</code> 到 <code>api.notion.com</code> 是子请求，<b>不加费</b>。HMAC 验签亚毫秒，整次调用 &lt;&lt; 10 ms，&lt; 1000 单/月余量 &gt; 99.9%。</p>
+  <div class="ev">Cloudflare 官方：Free tier = 100,000 requests/day and 10 ms CPU per invocation（原文）。Notion HTTPS POST 是子请求，所以 0 元增量。</div>
+  <div class="src">来源：<a href="https://developers.cloudflare.com/workers/platform/pricing" target="_blank" rel="noopener">developers.cloudflare.com/workers/platform/pricing</a> ·
+  <a href="https://developers.cloudflare.com/workers/platform/limits" target="_blank" rel="noopener">…/limits</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F2 · high</span><b>EdgeOne Free Plan 没有合同 SLA——支付回调"可靠性期望"非合同化。</b></p>
+  <p>官方文档原文："Basic security and acceleration services are provided, but SLA is not guaranteed"；99.9% SLA 仅在付费档与独立 SLA 法律文档里出现。对支付回调意味着任何可用性期待都是 informal，不是 contract。</p>
+  <div class="ev">原文："SLA guarantee level will be adjusted from 99.9% to no guaranteed SLA."（Free Plan 文档）</div>
+  <div class="src">来源：<a href="https://www.tencentcloud.com/document/product/1145/70405" target="_blank" rel="noopener">EdgeOne Free Plan Guide</a> ·
+  <a href="https://intl.cloud.tencent.com/document/product/301/55985" target="_blank" rel="noopener">EdgeOne SLA legal doc</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F3 · high</span><b>中国大陆腾讯云 VPS 公开域名必须备案；香港/海外节点豁免。</b></p>
+  <p>境内服务器 80/443 端口解析到未备案域名 → 运营商直接 RST。非标端口是短期绕过，2025 年端口扫描执法已收紧。香港/海外 VPS 完全不需要备案。</p>
+  <div class="ev">原文："中国香港地区及境外地区的云服务无需进行备案，也不能用于备案"。</div>
+  <div class="src">来源：<a href="https://www.tencentcloud.com/solutions/icp-registration-support" target="_blank" rel="noopener">Tencent Cloud ICP Support</a> ·
+  <a href="https://cloud.tencent.com/document/product/243/18908" target="_blank" rel="noopener">境内备案</a> ·
+  <a href="https://cloud.tencent.com/document/product/243/19630" target="_blank" rel="noopener">HK 节点规则</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F4 · high</span><b>Notion REST 平均 3 req/s/连接，429/529 都带 Retry-After。</b></p>
+  <p>官方文档明文："an average of three requests per second per connection (bursts above average are allowed)"。429 = "This request exceeds the number of requests allowed. Slow down and try again."；529 = "Notion is temporarily overloaded. Respect the Retry-After response header and try again later."</p>
+  <div class="ev">推荐处理顺序：①先读 <code>Retry-After</code>；②用 queue 做后端退避；③exponential backoff + jitter（避免 thundering herd）。</div>
+  <div class="src">来源：<a href="https://developers.notion.com/reference/request-limits" target="_blank" rel="noopener">Notion Request Limits</a> ·
+  <a href="https://developers.notion.com/reference/status-codes" target="_blank" rel="noopener">Notion Status Codes</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F5 · high</span><b>4 方案都必须实现"幂等重试 + 指数退避 + 抖动"。</b></p>
+  <p>POST <code>/v1/pages</code> 非幂等——一次 429 重试就重复行。两种防御：①Stripe-style idempotency key；②natural-key dedup（用 Z-Pay <code>trade_no</code>，项目当前已经这样做）。这是<b>可行性门槛</b>，不是<b>差异化</b>。</p>
+  <div class="ev">AWS 工程文章警告：plain exponential backoff 会让多个客户端在同秒重试——必须加 jitter。</div>
+  <div class="src">来源：<a href="https://developers.notion.com/reference/request-limits" target="_blank" rel="noopener">Notion Request Limits</a> ·
+  <a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter" target="_blank" rel="noopener">AWS: Exponential Backoff and Jitter</a> ·
+  <a href="https://datatracker.ietf.org/doc/html/rfc6585" target="_blank" rel="noopener">RFC 6585 (HTTP 429)</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F6 · high</span><b>Notion 的 webhook 是 at-most-once（8 次重试 / 24h，无日志/无手动重放）——反方向用 API 直写反而更稳。</b></p>
+  <p>原方向是 Notion → 消费者，不适用 Z-Pay → Notion；但它说明 Notion 整体 webhook 生态"消费方成熟、提供方薄弱"，所以在 Z-Pay → Notion 方向上，<b>由接收端自己调 REST API（方案 3、4 风格）比走 Notion webhook 范式更可靠</b>。</p>
+  <div class="ev">原文："We aim for at-most-once event delivery... retry delivery up to 8 times using an exponential backoff schedule."Hookdeck 补充："Browsable log: Not available" / "Manual retry: Not available"。</div>
+  <div class="src">来源：<a href="https://developers.notion.com/reference/webhooks-events-delivery" target="_blank" rel="noopener">Notion Webhook Delivery</a> ·
+  <a href="https://hookdeck.com/webhooks/platforms/guide-to-notion-webhooks-features-and-best-practices" target="_blank" rel="noopener">Hookdeck: Notion Webhook Guide</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F7 · high</span><b>EdgeOne Pages Functions 提供两种 serverless：Edge（毫秒级冷启动，全球边缘）+ Cloud（百毫秒冷启动，Node/Python/Go）。</b></p>
+  <p>当前 <code>notify.ts</code> 跑在 Cloud Function。如果未来要降冷启动，<b>不用换平台</b>，改用 Pages Edge Function 即可（毫秒级冷启动 + 仍 0 元）。这是方案 4 的隐藏升级空间。</p>
+  <div class="ev">原文："Edge Functions: Runs on EdgeOne global edge nodes, provides ultra-low latency and millisecond-level cold startup ... Cloud Functions: Deployed on cloud servers, supports Node.js, Python, and Go multiple runtime environments."</div>
+  <div class="src">来源：<a href="https://pages.edgeone.ai/document/pages-functions-overview" target="_blank" rel="noopener">Pages Functions Overview</a> ·
+  <a href="https://pages.edgeone.ai/document/release-notes" target="_blank" rel="noopener">Release Notes</a></div>
+</div>
+
+<div class="finding" data-conf="high">
+  <p><span class="tag">F8 · high</span><b>Cloudflare Workers 调试链是生产可用的（<code>wrangler tail</code>）。</b></p>
+  <p>Wrangler v3 提供 <code>--status</code> / <code>--method</code> / <code>--search</code> / <code>--sampling-rate</code> / <code>--header</code> / <code>--ip-address</code> 过滤 + JSON 输出，<code>jq</code> 即可 triage Z-Pay 回调。已知 caveat：filter 改动生效有 ~10s 延迟（cloudflare/workers-sdk#8863）。</p>
+  <div class="ev">示例：<code>wrangler tail --format=json --status=error | jq 'select(.request.url|test("zpay"))'</code> 可以即时定位 Z-Pay 回调 4xx/5xx。</div>
+  <div class="src">来源：<a href="https://developers.cloudflare.com/workers/wrangler/commands/workers" target="_blank" rel="noopener">Wrangler v3 docs</a> ·
+  <a href="https://blog.cloudflare.com/logs-from-the-dashboard-for-cloudflare-workers" target="_blank" rel="noopener">Dashboard Logs blog</a></div>
+</div>
+
+<h2 id="gaps">6. 未结问题 / 研究空白</h2>
+
+<div class="box box-warn">
+  <p>以下 4 个问题是研究过程中<b>未能完全证实</b>的，建议在做决策前用一手测试/工单确认：</p>
+  <ol>
+    <li><b>EdgeOne Pages Cloud Function 免费层具体配额</b>（月请求量、函数 timeout、出站 fetch 限制）—— 官方文档未明确列出，验证环节拒绝对"文档没覆盖"做背书。</li>
+    <li><b>Z-Pay 回源 → 4 方案的 p50/p95 延迟实测</b>—— 唯一候选证据（Hetzner Germany 测点）被反驳；境内回源路径无直接测量。</li>
+    <li><b>EdgeOne Pages Cloud Function 自身的失败/重试语义</b>—— 在 5xx 响应下是否自动重试？还是由 Z-Pay 商户平台重试决定？影响"幂等"实现归属。</li>
+    <li><b>方案 4 的最小生产化补丁</b>—— 当前的 <code>notify.ts</code> 是否已经实现 <code>Retry-After</code> 读取 + 指数退避 + 抖动？是否对 Z-Pay <code>trade_no</code> 做 natural-key dedup？</li>
+  </ol>
+  <p style="margin:8px 0 0; font-size:13px; color:#7a5a00">
+    建议：花半天在 <code>lib/zpay.js</code> + <code>lib/order-store.js</code> 上跑一遍单元测试，
+    把"已实现 / 未实现"画成一张表。这是一次性 2–4 小时工时，能把这份报告的"无证据"项补齐。
+  </p>
+</div>
+
+<h2 id="sources">7. 来源清单（27 条）</h2>
+
+<ol class="src-list">
+  <li><span class="q">[1]</span><a href="https://developers.cloudflare.com/workers/platform/pricing" target="_blank" rel="noopener">Cloudflare Workers Pricing</a></li>
+  <li><span class="q">[2]</span><a href="https://developers.cloudflare.com/workers/platform/limits" target="_blank" rel="noopener">Cloudflare Workers Limits</a></li>
+  <li><span class="q">[3]</span><a href="https://developers.cloudflare.com/workers/wrangler/commands/workers" target="_blank" rel="noopener">Wrangler v3 commands</a></li>
+  <li><span class="q">[4]</span><a href="https://blog.cloudflare.com/logs-from-the-dashboard-for-cloudflare-workers" target="_blank" rel="noopener">Cloudflare: Logs from Dashboard</a></li>
+  <li><span class="q">[5]</span><a href="https://blog.cloudflare.com/zh-cn/cloudflare-one-in-china" target="_blank" rel="noopener">Cloudflare One in China (CN blog)</a></li>
+  <li><span class="q">[6]</span><a href="https://blog.webp.se/cloudflare-workers-geo-lb-zh" target="_blank" rel="noopener">Cloudflare Workers 地理 LB (CN)</a></li>
+  <li><span class="q">[7]</span><a href="https://github.com/lework/cloudflare-workers" target="_blank" rel="noopener">lework/cloudflare-workers (实践范例)</a></li>
+  <li><span class="q">[8]</span><a href="https://www.justaftermidnight247.com/insights/cloudflare-pages-vs-workers-which-one-should-you-use" target="_blank" rel="noopener">Cloudflare Pages vs Workers</a></li>
+  <li><span class="q">[9]</span><a href="https://www.vvhan.com/article/edgeone-pages-vs-cloudflare" target="_blank" rel="noopener">EdgeOne Pages vs Cloudflare (CN)</a></li>
+  <li><span class="q">[10]</span><a href="https://oneuptime.com/blog/post/2026-01-28-debug-cloudflare-workers/view" target="_blank" rel="noopener">Debug Cloudflare Workers</a></li>
+  <li><span class="q">[11]</span><a href="https://pages.edgeone.ai/document/pages-functions-overview" target="_blank" rel="noopener">EdgeOne Pages Functions Overview</a></li>
+  <li><span class="q">[12]</span><a href="https://pages.edgeone.ai/document/release-notes" target="_blank" rel="noopener">EdgeOne Pages Release Notes</a></li>
+  <li><span class="q">[13]</span><a href="https://pages.edgeone.ai/zh/document/notification" target="_blank" rel="noopener">EdgeOne Pages 通知 (CN)</a></li>
+  <li><span class="q">[14]</span><a href="https://www.tencentcloud.com/document/product/1145/70405" target="_blank" rel="noopener">EdgeOne Free Plan Guide</a></li>
+  <li><span class="q">[15]</span><a href="https://intl.cloud.tencent.com/document/product/301/55985" target="_blank" rel="noopener">EdgeOne SLA Legal Doc</a></li>
+  <li><span class="q">[16]</span><a href="https://main.qcloudimg.com/raw/document/intl/product/pdf/tencent-cloud_1145_48704_en.pdf" target="_blank" rel="noopener">EdgeOne PDF (EN)</a></li>
+  <li><span class="q">[17]</span><a href="https://www.tencentcloud.com/solutions/icp-registration-support" target="_blank" rel="noopener">Tencent Cloud ICP Support</a></li>
+  <li><span class="q">[18]</span><a href="https://cloud.tencent.com/document/product/243/18908" target="_blank" rel="noopener">Tencent 境内备案</a></li>
+  <li><span class="q">[19]</span><a href="https://cloud.tencent.com/document/product/243/19630" target="_blank" rel="noopener">Tencent HK 节点规则</a></li>
+  <li><span class="q">[20]</span><a href="https://cloud.tencent.com.cn/developer/information/腾讯云免备案" target="_blank" rel="noopener">腾讯云免备案 (CN)</a></li>
+  <li><span class="q">[21]</span><a href="https://developers.notion.com/reference/request-limits" target="_blank" rel="noopener">Notion Request Limits</a></li>
+  <li><span class="q">[22]</span><a href="https://developers.notion.com/reference/status-codes" target="_blank" rel="noopener">Notion Status Codes</a></li>
+  <li><span class="q">[23]</span><a href="https://developers.notion.com/reference/webhooks-events-delivery" target="_blank" rel="noopener">Notion Webhook Delivery</a></li>
+  <li><span class="q">[24]</span><a href="https://hookdeck.com/webhooks/platforms/guide-to-notion-webhooks-features-and-best-practices" target="_blank" rel="noopener">Hookdeck: Notion Webhook Guide</a></li>
+  <li><span class="q">[25]</span><a href="https://community.n8n.io/t/help-needed-webhooks-randomly-stop-require-workflow-toggle-to-resume-not-sustainable/119667" target="_blank" rel="noopener">n8n: webhook 睡死</a></li>
+  <li><span class="q">[26]</span><a href="https://community.n8n.io/t/rate-limit-with-n8n-notion/269595?tl=en" target="_blank" rel="noopener">n8n + Notion rate limit</a></li>
+  <li><span class="q">[27]</span><a href="https://alltomate.com/blogs/make-com-pricing-plans-explained" target="_blank" rel="noopener">Make Pricing Plans (2nd-source)</a></li>
+  <li><span class="q">[+]</span><a href="https://nicksaraev.com/n8n-vs-make-2025" target="_blank" rel="noopener">n8n vs Make 2025 (2nd-source)</a></li>
+  <li><span class="q">[+]</span><a href="https://openhosst.com/blog/n8n-cloud-pricing" target="_blank" rel="noopener">n8n Cloud Pricing (2nd-source)</a></li>
+  <li><span class="q">[+]</span><a href="https://pixeljets.com/blog/n8n" target="_blank" rel="noopener">pixeljets: n8n blog</a></li>
+  <li><span class="q">[+]</span><a href="https://dev.to/agntable/before-you-self-host-n8n-ask-these-production-questions-21c8" target="_blank" rel="noopener">DEV: Self-host n8n questions</a></li>
+  <li><span class="q">[+]</span><a href="https://community.n8n.io/t/is-there-an-n8n-setup-that-avoids-downtime-altogether/34086" target="_blank" rel="noopener">n8n: avoiding downtime</a></li>
+  <li><span class="q">[+]</span><a href="https://sspai.com/prime/story/automation-n8n" target="_blank" rel="noopener">少数派: automation n8n</a></li>
+  <li><span class="q">[+]</span><a href="https://abhiman.io/blog/api-rate-limits-explained" target="_blank" rel="noopener">API rate limits explained</a></li>
+  <li><span class="q">[+]</span><a href="https://dev.to/kanta13jp1/notion-api-rate-limits-are-breaking-your-automation-heres-the-real-fix-o5p" target="_blank" rel="noopener">Notion API rate limits fix</a></li>
+  <li><span class="q">[+]</span><a href="https://zuplo.com/learning-center/http-429-too-many-requests-guide" target="_blank" rel="noopener">HTTP 429 Guide</a></li>
+  <li><span class="q">[+]</span><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter" target="_blank" rel="noopener">AWS: Backoff + Jitter</a></li>
+  <li><span class="q">[+]</span><a href="https://datatracker.ietf.org/doc/html/rfc6585" target="_blank" rel="noopener">RFC 6585</a></li>
+</ol>
+
+<h2 id="method">8. 方法论 / 可信度说明</h2>
+
+<div class="box">
+  <h4 style="margin-top:0">这是怎么来的</h4>
+  <p>
+    报告由 <code>deep-research</code> workflow 生成：5 个搜索角度并行 →
+    URL 去重后抓 27 个来源 → 提取 128 条断言 →
+    3 票对抗式核验 25 条（2/3 反驳即删）→ 9 条被反驳 → 8 条 confidence=high 留下。
+    全程 109 次子 agent 调用，~22 分钟。
+  </p>
+
+  <h4>可信度分级</h4>
+  <ul>
+    <li><span class="pill pill-ok">high</span> = 2 个以上 primary 文档（官方定价/产品页/标准 RFC）支持</li>
+    <li><span class="pill pill-warn">medium</span> = 1 primary + 1 secondary（实践者博客/社区帖）</li>
+    <li><span class="pill pill-bad">killed</span> = 3 票中 ≥ 2 反驳，已剔除</li>
+  </ul>
+
+  <h4>本报告的局限</h4>
+  <ul>
+    <li>未在境内做实测 p50/p95，所有延迟结论都是"路径推断"而非"测量"；</li>
+    <li>Make 官方定价页要求登录，依赖二级博客截图，置信度比方案 3/4 低一档；</li>
+    <li>EdgeOne Pages Cloud Function 免费层具体配额未在公开文档列出，文中标为"未结问题"；</li>
+    <li>报告结论适用于"个人开发者 / &lt; 1000 单/月 / 单一支付渠道"——切换到企业级 / 跨渠道时需重做评估。</li>
+  </ul>
+
+  <h4>建议的下一步</h4>
+  <ol>
+    <li>把这份报告 commit 到 <code>docs/PAYMENT-CALLBACK-COMPARISON.html</code>（已落盘）。</li>
+    <li>花 2–4 小时对 <code>lib/zpay.js</code> + <code>lib/order-store.js</code> 做一次"已实现 / 未实现"自审，补齐第 6 节"未结问题"。</li>
+    <li>把这次研究的"研究方法 + 5 个搜索角度"存为项目 memory（<code>project/payment-callback-architecture.md</code>），未来调整方案时直接复用模板。</li>
+  </ol>
+</div>
+
+<footer>
+  报告由 deep-research workflow 生成 · myNotionNext · 2026-06-10
+  · 关联代码 <code>docs/ARCHITECTURE-payment.md</code> + <code>docs/SECURITY-REVIEW-payment.md</code>
+</footer>
+
+</div>
+</body>
+</html>
