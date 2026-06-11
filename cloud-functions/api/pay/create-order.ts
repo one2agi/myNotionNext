@@ -99,8 +99,15 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
     // 才能做金额比对；不调 recordOrder → notify 100% 报 amount mismatch。
     // recordOrder 是同步函数，直接调（不 await）。
     // H-4: 折扣后金额 finalPriceFen 落单, notify 端金额校验按折扣后价比对
+    // H-5: 存 customerInfo 让 notify.ts 能读 name/email/discountCode/partnerName 调 Workers
     const { recordOrder } = await import('../../../lib/order-store.js')
-    recordOrder(outTradeNo, finalPriceFen)
+    recordOrder(outTradeNo, finalPriceFen, {
+      name: customer.name.trim(),
+      email: customer.email.trim(),
+      discountCode: discountCode ?? undefined,
+      partnerName: discountApplied?.partnerName,
+      productName: product.name,
+    })
     const { createNativeOrder } = await import('../../../lib/zpay.js')
     const customerName = customer.name.trim()
     const { qrcode, imgUrl } = await createNativeOrder({

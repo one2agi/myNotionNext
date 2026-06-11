@@ -8,10 +8,14 @@
  * 3. 非 TRADE_SUCCESS → 早 ack 'success' (中间态重发没意义)
  * 4. alreadyPaid 幂等检查 (已 paid → 'success'，不重复处理)
  * 5. markPaid 金额校验 + 写内存 (mismatch → 400 'amount mismatch')
- * 6. 返 plain text 'success' (否则 Z-Pay 按 0/15/.../3600s 重发 11 次)
+ * 6. H-5 简化: markPaid 成功后直接调 Notion REST API 写订单页 (2.5s AbortController, Sentry warn)
+ * 7. 返 plain text 'success' (否则 Z-Pay 按 0/15/.../3600s 重发 11 次)
+ *
+ * H-5 简化 (2026-06-11): 直接 Notion API (砍掉 Workers 层)
  */
+import crypto from 'crypto'
 import { verifySign } from '../../../lib/zpay.js'
-import { alreadyPaid, markPaid } from '../../../lib/order-store.js'
+import { alreadyPaid, markPaid, getOrder } from '../../../lib/order-store.js'
 
 interface EventContext {
   request: Request
@@ -31,12 +35,71 @@ async function readParams(request: Request, isPost: boolean): Promise<Record<str
   return out
 }
 
+/**
+ * H-5 简化: 直接写 Notion 订单页 (砍 Workers 层)
+ * POST https://api.notion.com/v1/pages
+ * 2.5s AbortController (G3 修复: EdgeOne 3s 超时, 留 0.5s buffer)
+ * 失败不阻断 200 success 给 Z-Pay
+ */
+async function writeNotionPage(outTradeNo: string, moneyYuan: string, env: Record<string, string>): Promise<void> {
+  const notionToken = env.NOTION_TOKEN
+  const databaseId = env.NOTION_DATABASE_ID
+  if (!notionToken || !databaseId) return
+
+  const order = getOrder(outTradeNo)
+  const ci = order?.customerInfo ?? { name: '', email: '', discountCode: undefined, partnerName: undefined }
+
+  const payload = {
+    parent: { database_id: databaseId },
+    properties: {
+      Name: { title: [{ text: { content: ci.name || '匿名' } }] },
+      '客户邮箱': { email: ci.email || '' },
+      '购买日期': { date: { start: new Date().toISOString().slice(0, 10) } },
+      '状态': { status: { name: '待发送' } },
+      '订单号': { rich_text: [{ text: { content: outTradeNo } }] },
+      '商品名': { rich_text: [{ text: { content: ci.productName ?? '' } }] },
+      '金额': { number: parseFloat(moneyYuan) },
+      '备注': {
+        rich_text: [{
+          text: {
+            content: ci.discountCode
+              ? `[code:${ci.discountCode} ${ci.partnerName ?? ''}] 付款于 ${new Date().toISOString().slice(11, 19)}`
+              : `付款于 ${new Date().toISOString().slice(11, 19)}`,
+          },
+        }],
+      },
+    },
+  }
+  const rawBody = JSON.stringify(payload)
+
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 2500)
+
+  try {
+    const res = await fetch('https://api.notion.com/v1/pages', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${notionToken}`,
+        'Notion-Version': '2025-09-03',
+        'Content-Type': 'application/json',
+      },
+      body: rawBody,
+      signal: ac.signal,
+    })
+    if (!res.ok) {
+      // H-5: Notion API HTTP error — log to console (Sentry added later in H-10)
+      console.warn(`[notify] Notion API HTTP ${res.status} for ${outTradeNo}`)
+    }
+  } catch (e: any) {
+    const isAbort = e?.name === 'AbortError'
+    console.warn(`[notify] Notion API error for ${outTradeNo}: ${isAbort ? 'timeout' : e?.message}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function handle(request: Request, env: Record<string, string>, isPost: boolean): Promise<Response> {
   const params = await readParams(request, isPost)
-  // 早返:out_trade_no / money 任一缺失都返 400（tsconfig noUncheckedIndexedAccess 让
-  // params 索引访问返 string | undefined，传给 markPaid / alreadyPaid / parseFloat
-  // 会触发 TS2345；运行时 markPaid(undefined, ...) 会让金额校验 100% 失败）。
-  // 跟 query-order.ts 缺 outTradeNo 返 400 一致。
   const outTradeNo = params.out_trade_no
   const money = params.money
   if (!outTradeNo || !money) {
@@ -54,6 +117,14 @@ async function handle(request: Request, env: Record<string, string>, isPost: boo
   if (!markPaid(outTradeNo, parseFloat(money))) {
     return new Response('amount mismatch', { status: 400 })
   }
+
+  // H-5 简化: markPaid 成功后直接写 Notion API
+  try {
+    await writeNotionPage(outTradeNo, money, env)
+  } catch {
+    // already captured in writeNotionPage, no need to handle here
+  }
+
   return new Response('success')
 }
 
