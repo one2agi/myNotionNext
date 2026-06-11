@@ -44,7 +44,10 @@ async function readParams(request: Request, isPost: boolean): Promise<Record<str
 async function writeNotionPage(outTradeNo: string, moneyYuan: string, env: Record<string, string>): Promise<void> {
   const notionToken = env.NOTION_TOKEN
   const databaseId = env.NOTION_DATABASE_ID
-  if (!notionToken || !databaseId) return
+  if (!notionToken || !databaseId) {
+    console.warn('[notify] NOTION_TOKEN or NOTION_DATABASE_ID not set, skipping Notion write')
+    return
+  }
 
   const order = getOrder(outTradeNo)
   const ci = order?.customerInfo ?? { name: '', email: '', discountCode: undefined, partnerName: undefined, productName: '' }

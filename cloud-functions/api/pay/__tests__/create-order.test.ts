@@ -9,7 +9,7 @@
  * - 真实 `products.config.js`（零依赖，纯静态数据，monkey-patch 收益小）
  *
  * 覆盖 4 个分支：
- *   1. 正常下单（10 分 → money "0.10" 元，调 createNativeOrder，返 200 + 完整字段）
+ *   1. 正常下单（50 分 → money "0.50" 元，调 createNativeOrder，返 200 + 完整字段）
  *   2. 缺 env（ZPAY_PID 空 → 500 + error 含 "ZPAY_PID" / "Missing env"，不调 createNativeOrder）
  *   3. 商品未找到（productId 不存在 → 400 + error 含 "Unknown" / "not found"，不调 createNativeOrder）
  *   4. 商品免费（starter-free price=0 → 400 + error 含 "free" / "unpaid"，不调 createNativeOrder）
@@ -96,7 +96,7 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     mockedRecordOrder.mockReset()
   })
 
-  it('1. 正常下单: env 完整 + starter-full (10 分) → 200 + 完整字段 + money "0.10" 元 + name 是商品名', async () => {
+  it('1. 正常下单: env 完整 + starter-full (50 分) → 200 + 完整字段 + money "0.50" 元 + name 是商品名', async () => {
     mockedCreateNativeOrder.mockResolvedValue({
       outTradeNo: 'mock-123',
       tradeNo: 'ZPAY456',
@@ -120,8 +120,8 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
         qrcode: 'weixin://wxpay/bizpayurl?pr=MOCK',
         imgUrl: 'https://zpayz.cn/qrcode/mock.jpg',
         productId: 'starter-full',
-        productName: '知行合一 · 完整版',
-        totalFen: 10,
+        productName: '标准版',
+        totalFen: 50,
       })
     )
     // outTradeNo 应非空（handler 内部生成）
@@ -130,8 +130,8 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     // createNativeOrder 调用断言
     expect(mockedCreateNativeOrder).toHaveBeenCalledTimes(1)
     const call = mockedCreateNativeOrder.mock.calls[0][0] as any
-    expect(call.money).toBe('0.10') // 分 → 元 字符串, 2 位小数
-    expect(call.name).toBe('知行合一 · 完整版-张三') // H-4: 拼接 customer.name
+    expect(call.money).toBe('0.50') // 分 → 元 字符串, 2 位小数
+    expect(call.name).toBe('标准版-张三') // H-4: 拼接 customer.name
     expect(call.notifyUrl).toBe(FULL_ENV.ZPAY_NOTIFY_URL)
     expect(call.env.ZPAY_PID).toBe(FULL_ENV.ZPAY_PID)
     expect(call.env.ZPAY_KEY).toBe(FULL_ENV.ZPAY_KEY)
@@ -165,7 +165,8 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
   })
 
-  it('4. 商品免费: starter-free (price=0) → 400 + error 含 "free"/"unpaid" + 不调 createNativeOrder', async () => {
+  it('4. 商品未找到: starter-free (已删除) → 400 + error 含 "Unknown"/"not found"', async () => {
+    // starter-free 已从 products.config.js 移除（改为付费三档）
     const request = makeRequest({ productId: 'starter-free', customer: { name: '张三', email: 'a' + '@' + 'b.com' } })
     const response = await onRequestPost({
       request,
@@ -175,11 +176,11 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
 
     expect(response.status).toBe(400)
     const body = await readJson(response)
-    expect(body.error).toMatch(/free|unpaid/i)
+    expect(body.error).toMatch(/Unknown|not found/i)
     expect(mockedCreateNativeOrder).not.toHaveBeenCalled()
   })
 
-  it('5. 落单: 调 createNativeOrder 前先 recordOrder(outTradeNo, product.price=10) 给 notify 金额校验用', async () => {
+  it('5. 落单: 调 createNativeOrder 前先 recordOrder(outTradeNo, product.price=50) 给 notify 金额校验用', async () => {
     // 回归测试:防 F1 CRITICAL（漏调 recordOrder 导致 notify 金额校验全失效）
     // notify.ts 内部 markPaid → store.get(outTradeNo) 必须命中已存在记录才能做金额比对，
     // 因此 create-order 必须先 recordOrder(outTradeNo, product.price) 落单。
@@ -203,9 +204,9 @@ describe('onRequestPost (cloud-functions/api/pay/create-order)', () => {
     expect(mockedRecordOrder).toHaveBeenCalledTimes(1)
     // 关键断言:recordOrder 的 outTradeNo 必须跟响应里返的 outTradeNo 一致
     //（即 create-order 内部生成的同一 outTradeNo 被同时用于落单和返 200）
-    // + 第二参数必须是 product.price 的整数值 10（starter-full）
+    // + 第二参数必须是 product.price 的整数值 50（starter-full 标准版）
     // H-4: recordOrder 现在传 3 个参数 (outTradeNo, finalPriceFen, customerInfo)
-    expect(mockedRecordOrder).toHaveBeenCalledWith(body.outTradeNo, 10, expect.objectContaining({ name: '张三', email: expect.any(String) }))
+    expect(mockedRecordOrder).toHaveBeenCalledWith(body.outTradeNo, 50, expect.objectContaining({ name: '张三', email: expect.any(String) }))
   })
 })
 
@@ -369,10 +370,10 @@ describe('onRequestPost (create-order) — H-4 customer + discount', () => {
       code: 'PARTNER01',
       partnerName: '张三的数码店',
       discountPct: 0,
-      originalFen: 10,
+      originalFen: 50,
     })
-    // discountPct=0 不变价,money 仍 0.10
+    // discountPct=0 不变价,money 仍 0.50
     const call = mockedCreateNativeOrder.mock.calls[0][0] as any
-    expect(call.money).toBe('0.10')
+    expect(call.money).toBe('0.50')
   })
 })

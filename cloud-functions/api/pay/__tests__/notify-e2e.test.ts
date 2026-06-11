@@ -97,7 +97,7 @@ describe('pay E2E — create-order recordOrder → notify markPaid', () => {
     const outTradeNo = await placeOrder('starter-full')
     const res = await notifyCallback({
       out_trade_no: outTradeNo,
-      money: '0.10',
+      money: '0.50',
       trade_status: 'TRADE_SUCCESS',
       sign: 'x',
     })
@@ -111,7 +111,7 @@ describe('pay E2E — create-order recordOrder → notify markPaid', () => {
     // 这正是 F1 (CRITICAL) 漏掉的链路
     const res = await notifyCallback({
       out_trade_no: 'never-recorded-' + Date.now(),
-      money: '0.10',
+      money: '0.50',
       trade_status: 'TRADE_SUCCESS',
       sign: 'x',
     })
@@ -123,7 +123,7 @@ describe('pay E2E — create-order recordOrder → notify markPaid', () => {
     const outTradeNo = await placeOrder('starter-full')
     const params = {
       out_trade_no: outTradeNo,
-      money: '0.10',
+      money: '0.50',
       trade_status: 'TRADE_SUCCESS',
       sign: 'x',
     }
@@ -151,7 +151,7 @@ describe('pay E2E — create-order recordOrder → notify markPaid', () => {
     // 中间态: 早 ack,但不 markPaid
     const r1 = await notifyCallback({
       out_trade_no: outTradeNo,
-      money: '0.10',
+      money: '0.50',
       trade_status: 'WAIT_BUYER_PAY',
       sign: 'x',
     })
@@ -159,7 +159,7 @@ describe('pay E2E — create-order recordOrder → notify markPaid', () => {
     // 后续 TRADE_SUCCESS 仍能正常 markPaid
     const r2 = await notifyCallback({
       out_trade_no: outTradeNo,
-      money: '0.10',
+      money: '0.50',
       trade_status: 'TRADE_SUCCESS',
       sign: 'x',
     })
