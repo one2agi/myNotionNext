@@ -15,7 +15,7 @@
  * 关键：fetch 已在 jest.setup.js 全局 mock；这里只 mock 返回值
  */
 
-import { render, screen, act, waitFor } from '@testing-library/react'
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PayModal } from '../PayModal'
 
@@ -204,5 +204,160 @@ describe('PayModal', () => {
     })
 
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * Step 1 表单测试 (H-9, 7 cases)
+ *
+ * Mock 策略：URL-dispatched global.fetch (与现有 6 测一致, 不依赖 MSW)
+ * - lookup-discount: GET /api/pay/lookup-discount?code=XXX
+ * - create-order:    POST /api/pay/create-order  (扩展入参含 customer + discountCode)
+ *
+ * 扩展的 CREATE_ORDER_BODY (H-4 contract):
+ *   { outTradeNo, qrcode, imgUrl, productId, productName, totalFen, discountApplied? }
+ */
+describe('Step 1 表单', () => {
+  let onClose
+
+  beforeEach(() => {
+    jest.useFakeTimers()
+    onClose = jest.fn()
+    global.fetch.mockReset()
+    // jsdom fetch 内部可能用 new Request()；确保全局 Request 构造函数存在
+    if (typeof global.Request === 'undefined') {
+      global.Request = class Request {
+        constructor(url) { this.url = url }
+      }
+    }
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  it('1. 挂载时渲染姓名/邮箱/优惠码三个输入框', () => {
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    expect(screen.getByLabelText(/姓名/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/邮箱/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/优惠码/i)).toBeInTheDocument()
+  })
+
+  it('2. 姓名为空时"立即支付"按钮禁用', () => {
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    //触发 formTouched：点击邮箱触发 onChange，然后 fireEvent.blur 触发 onBlur
+    const emailInput = screen.getByLabelText(/邮箱/i)
+    userEvent.click(emailInput)
+    userEvent.type(emailInput, 'test@example.com')
+    fireEvent.blur(emailInput) // 直接 fire blur，userEvent.tab 在 jsdom 不稳定
+    expect(screen.getByRole('button', { name: /立即支付/i })).toBeDisabled()
+  })
+
+  it('3. 邮箱格式非法时"立即支付"按钮禁用', () => {
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    const nameInput = screen.getByLabelText(/姓名/i)
+    const emailInput = screen.getByLabelText(/邮箱/i)
+    userEvent.click(nameInput)
+    userEvent.type(nameInput, '张三')
+    userEvent.click(emailInput)
+    userEvent.type(emailInput, 'not-an-email')
+    fireEvent.blur(emailInput)
+    expect(screen.getByRole('button', { name: /立即支付/i })).toBeDisabled()
+  })
+
+  it('4. 姓名+邮箱有效且无优惠码时"立即支付"按钮启用', () => {
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    // fireEvent.change 可靠触发 React onChange（绕过 userEvent 键盘模拟不稳定问题）
+    fireEvent.change(screen.getByLabelText(/姓名/i), { target: { value: '张三' } })
+    fireEvent.blur(screen.getByLabelText(/姓名/i))
+    fireEvent.change(screen.getByLabelText(/邮箱/i), { target: { value: 'test@example.com' } })
+    fireEvent.blur(screen.getByLabelText(/邮箱/i))
+    expect(screen.getByRole('button', { name: /立即支付/i })).not.toBeDisabled()
+  })
+
+  it('5. 有效优惠码 PARTNER01 blur 后按钮启用', async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime })
+    // lookup-discount 返回 200（mockImplementation 处理 URL 分发）
+    global.fetch.mockImplementation(async (url) => {
+      const urlStr = url instanceof Request ? url.url : String(url)
+      if (urlStr.includes('/api/pay/lookup-discount')) {
+        return fetchResponse({ code: 'PARTNER01', partnerName: '张三的数码店', valid: true })
+      }
+      return fetchResponse({ status: 0 }, { ok: false })
+    })
+
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText(/姓名/i), { target: { value: '张三' } })
+    fireEvent.blur(screen.getByLabelText(/姓名/i))
+    fireEvent.change(screen.getByLabelText(/邮箱/i), { target: { value: 'test@example.com' } })
+    fireEvent.blur(screen.getByLabelText(/邮箱/i))
+    // userEvent.click 先聚焦，再 fireEvent.change（jsdom 需要聚焦后才能 change）
+    const discountInput = screen.getByLabelText(/优惠码/i)
+    userEvent.click(discountInput)
+    fireEvent.change(discountInput, { target: { value: 'PARTNER01' } })
+    fireEvent.blur(discountInput)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /立即支付/i })).not.toBeDisabled()
+    })
+  })
+
+  it('6. 无效优惠码 blur 后显示"优惠码无效"且按钮保持禁用', async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime })
+    global.fetch.mockImplementation(async (url) => {
+      const urlStr = url instanceof Request ? url.url : String(url)
+      if (urlStr.includes('/api/pay/lookup-discount')) {
+        return fetchResponse({ code: 'E_DC_NOT_FOUND', valid: false }, { ok: false, status: 404 })
+      }
+      return fetchResponse({ status: 0 }, { ok: false })
+    })
+
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText(/姓名/i), { target: { value: '张三' } })
+    fireEvent.blur(screen.getByLabelText(/姓名/i))
+    fireEvent.change(screen.getByLabelText(/邮箱/i), { target: { value: 'test@example.com' } })
+    fireEvent.blur(screen.getByLabelText(/邮箱/i))
+    const discountInput = screen.getByLabelText(/优惠码/i)
+    userEvent.click(discountInput)
+    fireEvent.change(discountInput, { target: { value: 'INVALID' } })
+    fireEvent.blur(discountInput)
+    await waitFor(() => {
+      expect(screen.getByText(/优惠码无效/i)).toBeInTheDocument()
+    })
+    expect(screen.getByRole('button', { name: /立即支付/i })).toBeDisabled()
+  })
+
+  it('7. 填写有效表单后提交成功 → 显示 Step 2 二维码', async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime })
+    const extendedOrder = {
+      outTradeNo: 'OUT-STEP1-001',
+      qrcode: 'weixin://wxpay/bizpayurl?pr=step1',
+      imgUrl: 'https://zpayz.cn/qrcode/OUT-STEP1-001.png',
+      productId: 'starter-full',
+      productName: '知行合一·完整版',
+      totalFen: 10
+    }
+    // jsdom fetch 在某些版本将 URL 转为 Request 对象；用 mockImplementation 兜底
+    global.fetch.mockImplementation(async (url) => {
+      const urlStr = url instanceof Request ? url.url : String(url)
+      if (urlStr.includes('/api/pay/create-order')) {
+        return fetchResponse(extendedOrder)
+      }
+      if (urlStr.includes('/api/pay/query-order')) {
+        return fetchResponse({ status: 0, money: '0.10', tradeNo: 't', msg: 'wait' })
+      }
+      return fetchResponse({ status: 0 }, { ok: false })
+    })
+
+    render(<PayModal product={PRODUCT} onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText(/姓名/i), { target: { value: '张三' } })
+    fireEvent.blur(screen.getByLabelText(/姓名/i))
+    fireEvent.change(screen.getByLabelText(/邮箱/i), { target: { value: 'test@example.com' } })
+    fireEvent.blur(screen.getByLabelText(/邮箱/i))
+    await user.click(screen.getByRole('button', { name: /立即支付/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('img')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://zpayz.cn/qrcode/OUT-STEP1-001.png')
+    expect(screen.getByText(/订单号：OUT-STEP1-001/)).toBeInTheDocument()
   })
 })
