@@ -122,34 +122,59 @@ async function handle(request: Request, env: Record<string, string>, isPost: boo
   const params = await readParams(request, isPost)
   const outTradeNo = params.out_trade_no
   const money = params.money
+  const tradeStatus = params.trade_status
+  console.log(`[notify] hit: method=${isPost ? 'POST' : 'GET'} outTradeNo=${outTradeNo} money=${money} trade_status=${tradeStatus}`)
   if (!outTradeNo || !money) {
+    console.warn(`[notify] missing params: outTradeNo=${outTradeNo} money=${money}`)
     return new Response('bad request', { status: 400 })
   }
   // GET 请求：用原始 query string 验签（避免 URL decode 破坏中文签名）
   // POST 请求：用已解码的 form data 验签（Z-Pay POST SDK 自动编码）
   if (isPost) {
     if (!verifySign(params, env.ZPAY_KEY ?? '')) {
+      console.warn(`[notify] sign error (POST) for ${outTradeNo}`)
       return new Response('sign error', { status: 400 })
     }
   } else {
     if (!verifySignRaw(request, env.ZPAY_KEY ?? '')) {
+      console.warn(`[notify] sign error (GET) for ${outTradeNo}`)
       return new Response('sign error', { status: 400 })
     }
   }
-  if (params.trade_status !== 'TRADE_SUCCESS') {
-    return new Response('success')
+  console.log(`[notify] sign OK for ${outTradeNo}`)
+  if (tradeStatus !== 'TRADE_SUCCESS') {
+    console.log(`[notify] non-success status ${tradeStatus} for ${outTradeNo}, acking`)
+    return successResponse()
   }
   if (alreadyPaid(outTradeNo)) {
-    return new Response('success')
+    console.log(`[notify] ${outTradeNo} already paid, acking`)
+    return successResponse()
   }
   if (!markPaid(outTradeNo, parseFloat(money))) {
+    console.warn(`[notify] amount mismatch for ${outTradeNo}`)
     return new Response('amount mismatch', { status: 400 })
   }
+  console.log(`[notify] markPaid OK for ${outTradeNo} money=${money}`)
 
   // 转发到 n8n（fire-and-forget，不阻塞 success 回复）
   forwardToN8n(outTradeNo, money, env)
 
-  return new Response('success')
+  return successResponse()
+}
+
+/**
+ * 返回 Z-Pay 期望的 plain text 'success'
+ * EdgeOne Pages 默认会注入 JSON 包装，必须显式设 Content-Type
+ * 且 body 必须是 7 字符的 "success"（无 BOM/无换行/无包装）
+ */
+function successResponse(): Response {
+  return new Response('success', {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+    },
+  })
 }
 
 export async function onRequestGet(ctx: EventContext): Promise<Response> {
