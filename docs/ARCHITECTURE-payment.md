@@ -76,7 +76,32 @@ NotionNext 项目的收费流程由前端 PayModal 发起，经 EdgeOne Pages Cl
 
 ## 4. 数据流
 
-### 4.1 `POST /api/pay/create-order`
+### 4.1 n8n 自托管方案（当前生产）
+
+```
+[Z-Pay 异步回调]
+        ↓ GET/POST
+[EdgeOne Cloud Function: notify.ts]
+        ├── verifySign / verifySignRaw（中文签名修复）
+        ├── alreadyPaid（幂等：同一订单只处理一次）
+        └── markPaid（金额校验，写入内存 store）
+                ↓ 通过后
+        POST n8n webhook（fire-and-forget, 2s AbortController）
+                ↓
+        [n8n VPS Docker 自托管]
+                ├── 接收 JSON（outTradeNo, money, name, email, ...）
+                └── 写入 Notion 数据库（状态="待发送"）
+                        ↓
+        Notion 数据库（客户管理模板）
+```
+
+**优势**：
+- n8n 跑在用户自己的 VPS，不经过 GFW
+- 幂等由 `alreadyPaid` 保证（同一订单只转发一次 n8n）
+- n8n 内部可开启 Retry（1s/2s/4s）+ Dead Letter + Sentry 上报
+- 不依赖 Notion Workers Beta（教育版计划无资格）
+
+### 4.2 `POST /api/pay/create-order`
 
 **请求**（前端 → 后端）：
 ```json
@@ -101,7 +126,7 @@ NotionNext 项目的收费流程由前端 PayModal 发起，经 EdgeOne Pages Cl
 }
 ```
 
-### 4.2 `GET|POST /api/pay/notify`
+### 4.3 `GET|POST /api/pay/notify`
 
 Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `notify.ts` 同时导出 `onRequestGet` + `onRequestPost`，两者转给同一个 `handle(ctx)`。
 
@@ -111,11 +136,26 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 3. 幂等检查（`orderStore.alreadyPaid(outTradeNo)`），命中直接回 `success`
 4. 金额校验：反查 `outTradeNo` 对应的 `priceFen`，比对 Z-Pay 回调的 `money`（元）`× 100`（已转换）
 5. `orderStore.markPaid(outTradeNo, money)`
-6. **必须** `return new Response('success')` plain text（否则 Z-Pay 按指数退避重发 11 次）
+6. `forwardToN8n`：POST 到 n8n webhook（fire-and-forget，2s AbortController）
+7. **必须** `return new Response('success')` plain text（否则 Z-Pay 按指数退避重发 11 次）
 
 **响应**：plain text `success`
 
-### 4.3 `GET /api/pay/query-order?outTradeNo=...`
+**n8n 转发数据**（POST body）：
+```json
+{
+  "outTradeNo": "1781200904493-13bmw7",
+  "money": "0.10",
+  "name": "张三",
+  "email": "zhangsan@example.com",
+  "productName": "基础版",
+  "discountCode": "PARTNER01",
+  "partnerName": "张三的店",
+  "paidAt": "2026-06-12"
+}
+```
+
+### 4.4 `GET /api/pay/query-order?outTradeNo=...`
 
 **作用**：代理 Z-Pay 订单查询，**防止 `ZPAY_KEY` 暴露到前端**（GET 拼接 `key=...` 不能进前端代码，会被抓包），同时绕过 Z-Pay 的 CORS 限制。
 
@@ -143,18 +183,21 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 | 1 | EdgeOne 控制台清掉 6 个 `WECHAT_*` + `BLOB_BOOTSTRAP_TOKEN`，加 3 个 `ZPAY_*` | ✅ 完成（2026-06-04） |
 | 2 | EdgeOne 控制台删 Blob bucket `wxpay-secrets`（旧 V3 私钥载体） | ⚠️ 待控制台核实（CLI 无 Blob 子命令） |
 | 3 | Z-Pay 商户后台填 `notify_url` = `https://www.one2agi.com/api/pay/notify` | ✅ 完成（生产已收款） |
-| 4 | （可选）把 `products.config.js` 价格从测试金额（10/30 分）改回真实价格 | ⏳ 暂不改 |
-| 5 | 微信支付商户平台轮换 V3 API key（git 历史曾泄露） | ✅ 完成（2026-06-06） |
-| 6 | `git filter-repo --path wechatpay.config.js --invert-paths` 清 history | ⏳ 计划中 |
+| 4 | n8n 部署到 VPS（docker compose） | ⏳ 待用户操作 |
+| 5 | EdgeOne Pages 控制台加 `N8N_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET` | ⏳ 待用户操作 |
+| 6 | n8n workflow 导入并激活 | ⏳ 待用户操作 |
+| 7 | （可选）把 `products.config.js` 价格从测试金额（10/30 分）改回真实价格 | ⏳ 暂不改 |
 
 > **注意**：EdgeOne Pages 部署 Next.js 项目**只支持静态导出**（`yarn export`），不要改 build 命令。`cloud-functions/` 是平台层独立部署的，不受 build 模式影响。
 
 ### 6.2 env 当前状态
 
-**当前生产 env（3 个 ZPAY_* 已生效）**：
+**当前生产 env（3 个 ZPAY_* + 2 个 N8N_*）**：
 - `ZPAY_PID` — Z-Pay 商户 ID
 - `ZPAY_KEY` — **只走 env**，绝不进 git
 - `ZPAY_NOTIFY_URL` — 回调地址（必须公网 HTTPS）
+- `N8N_WEBHOOK_URL` — n8n webhook 地址（例：`https://n8n.yourdomain.com/webhook/zpay-order`）
+- `N8N_WEBHOOK_SECRET` — n8n 校验 secret（静态随机字符串，两端一致）
 
 **可选**：
 - `ZPAY_RETURN_URL` — 支付完成后跳转地址
@@ -174,17 +217,61 @@ Z-Pay 官方文档写 GET，但 PHP/Java 服务商 SDK 经常 POST，因此 `not
 - **D5** 浏览器端到端：扫码 → 支付 → 弹窗自动关闭
 - **D6** Z-Pay 商户后台核单
 
-## 7. 已知限制 / 未来工作
+## 7. n8n 部署（Notion 写入层）
 
-- **内存 Map 重启丢记录**：Cloud Function 容器重启会清空 `order-store`，可能导致用户被多发一次"成功"事件（不影响扣款，钱在 Z-Pay 端已落）。要严格持久化需接 Notion DB 或外部 KV，本期不接。
+### 7.1 文件清单
+
+| 文件 | 说明 |
+|------|------|
+| `n8n/docker-compose.yml` | n8n + Redis，Docker Compose 部署 |
+| `n8n/.env` | 环境变量（HOST、加密密钥、Sentry DSN） |
+| `n8n/README.md` | 部署操作手册 |
+| `n8n/workflow-zpay-order.json` | n8n workflow（Webhook → Notion 写入） |
+
+### 7.2 部署前置条件
+
+- VPS（固定公网 IP）
+- 域名（可新增子域名指向 VPS）
+- Docker + Docker Compose
+- Nginx + Let's Encrypt（生产环境 HTTPS）
+
+### 7.3 DNS 配置
+
+新增子域名指向 VPS：
+```
+n8n.yourdomain.com  A  你的VPS固定IP
+```
+
+### 7.4 n8n workflow 节点
+
+```
+Webhook Trigger（POST /webhook/zpay-order）
+    ↓
+IF：检查 header x-n8n-secret
+    ↓（失败）→ Error Trigger（记录）
+    ↓（成功）
+Notion Create Page（database: 6ab4f4cf-c8e2-825e-bde8-016c2d9be1c2）
+    ↓
+Respond 200 {ok: true}
+```
+
+### 7.5 幂等保证
+
+- `alreadyPaid(outTradeNo)` 在 notify.ts 层已保证，同一订单只转发一次 n8n
+- n8n 内部可选加 IF 节点查询 Notion 是否已存在订单号
+
+## 8. 已知限制 / 未来工作
+
 - **商品价格仍是测试金额**：`products.config.js` 当前为 10/30 分，待改回真实价格（7900/29900 分）。
 - **PaywallButton 未实现**：`STARTER_PAYWALL_ENABLE` 注释已标"本期未启用"，组件待后续接入。
 - **支付宝/银联未接入**：本期只接微信 Native 扫码。
-- **DB 持久化待评估**：如未来需要订单历史、退款、对账，需引入 Notion DB 或其他持久化层。
 - **多实例不共享内存**：EdgeOne Cloud Function 可能多实例，`order-store` 跨实例不共享。单实例内幂等可保证业务正确；多实例不导致重复扣款（幂等检查在每个实例内独立完成）。
+- **n8n 可选增强**：queue 模式（高并发）、Sentry 上报、Dead Letter（Google Sheet 备用写入）
 
-## 8. 参考
+## 9. 参考
 
 - 完整迁移方案：见 git 历史（`git log --grep="pay" --oneline`），含决策记录、风险评估、阶段 A-D 详细步骤。
 - Z-Pay 官方文档：https://z-pay.cn/doc.html
 - 微信支付 V3 文档（历史）：https://pay.weixin.qq.com/wiki/doc/apiv3/（保留作为"为什么我们迁走了"的历史参考）
+- n8n 官方文档：https://docs.n8n.io/
+- Notion Workers 文档（历史，Beta 已放弃）：https://developers.notion.com/workers/

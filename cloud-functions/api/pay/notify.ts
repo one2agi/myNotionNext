@@ -8,12 +8,12 @@
  * 3. 非 TRADE_SUCCESS → 早 ack 'success' (中间态重发没意义)
  * 4. alreadyPaid 幂等检查 (已 paid → 'success'，不重复处理)
  * 5. markPaid 金额校验 + 写内存 (mismatch → 400 'amount mismatch')
- * 6. (暂未接入数据库写入方案，等后续规划)
+ * 6. forwardToN8n: POST 到 n8n webhook（fire-and-forget, 2s timeout）
  * 7. 返 plain text 'success' (否则 Z-Pay 按 0/15/.../3600s 重发 11 次)
  */
 import crypto from 'crypto'
 import { verifySign } from '../../../lib/zpay.js'
-import { alreadyPaid, markPaid } from '../../../lib/order-store.js'
+import { alreadyPaid, getOrder, markPaid } from '../../../lib/order-store.js'
 
 interface EventContext {
   request: Request
@@ -65,6 +65,59 @@ export function verifySignRaw(request: Request, key: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(receivedSign))
 }
 
+/**
+ * 转发已验证订单信息到 n8n（fire-and-forget，2s AbortController）
+ * n8n 负责写入 Notion 数据库
+ */
+async function forwardToN8n(
+  outTradeNo: string,
+  money: string,
+  env: Record<string, string>
+): Promise<void> {
+  const webhookUrl = env.N8N_WEBHOOK_URL
+  if (!webhookUrl) return
+
+  const order = getOrder(outTradeNo)
+  const ci = order?.customerInfo ?? {
+    name: '',
+    email: '',
+    discountCode: undefined,
+    partnerName: undefined,
+    productName: '',
+  }
+
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 2000)
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-n8n-secret': env.N8N_WEBHOOK_SECRET ?? '',
+      },
+      body: JSON.stringify({
+        outTradeNo,
+        money,
+        name: ci.name,
+        email: ci.email,
+        productName: ci.productName,
+        discountCode: ci.discountCode,
+        partnerName: ci.partnerName,
+        paidAt: new Date().toISOString().slice(0, 10),
+      }),
+      signal: ac.signal,
+    })
+    if (!res.ok) {
+      console.warn(`[notify] n8n forward HTTP ${res.status} for ${outTradeNo}`)
+    }
+  } catch (e: any) {
+    const isAbort = e?.name === 'AbortError'
+    console.warn(`[notify] n8n forward failed for ${outTradeNo}: ${isAbort ? 'timeout' : e?.message}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function handle(request: Request, env: Record<string, string>, isPost: boolean): Promise<Response> {
   const params = await readParams(request, isPost)
   const outTradeNo = params.out_trade_no
@@ -92,6 +145,9 @@ async function handle(request: Request, env: Record<string, string>, isPost: boo
   if (!markPaid(outTradeNo, parseFloat(money))) {
     return new Response('amount mismatch', { status: 400 })
   }
+
+  // 转发到 n8n（fire-and-forget，不阻塞 success 回复）
+  forwardToN8n(outTradeNo, money, env)
 
   return new Response('success')
 }
