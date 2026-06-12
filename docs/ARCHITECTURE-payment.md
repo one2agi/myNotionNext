@@ -276,13 +276,36 @@ Respond 200 {ok: true}
 - 用 Code 节点做 secret 校验（`$json.headers['x-n8n-secret']`），不要用 IF + `typeValidation: 'strict'`
 - 容器要 `TRUST_PROXY=true` 信任 nginx 注入的 X-Forwarded-For
 
-**Notion API 不稳**（已知问题，5 次中 ~3 次 connection refused，疑似 VPS→Notion 出站被 GFW 间歇 reset）：
-- n8n 节点 `settings.retryOnFail + maxTries: 4` 对 "service refused" **不生效**（n8n 视为致命错而非网络错）
-- Code 节点手动 retry 走不通：n8n API PUT 含中文键名（`客户邮箱`）的 Code 节点 server 500
-- **当前接受 60-70% 成功率**，失败兜底：**查 n8n executions list 找 mode=error 的，补发 Notify**
-- 可选增强：EdgeOne KV 记录订单 + 周期 worker 比对 Notion 缺单 + 自动补发
+**端到端验证**：CF-FINAL 1-5 / REBUILD 1-3 全部 100% 成功，Notion 收到"待发送"订单。
 
-**端到端验证**：TEST-017 / RETRY2-01 / CODE-01 等多次写入成功，Notion 新页面 URL 形如 `https://app.notion.com/p/{name}-...`。
+## 7.7 GFW 绕过方案（2026-06-12 完工）
+
+**根因诊断**：VPS（腾讯云广州）出口到 `api.notion.com`（Cloudflare anycast `208.103.161.1`）受 GFW 随机 TCP RST，实测成功率 20-60%（任何客户端都一样：wget/curl/Node fetch/n8n 节点无差异）。EdgeOne Pages 看似"官方 API 可以"实际是它**走腾讯云边缘 PoP**（HK/SG），与 VPS 跨境路径不同。
+
+**方案**（Cloudflare Worker 反代）：
+- 用 `faiz-world.com` 子域名 `notion-proxy.faiz-world.com`
+- 部署 Worker（`addEventListener('fetch')` 格式）转发 `api.notion.com`
+- 容器内 `extra_hosts` 把 `api.notion.com` 指向 CF 边缘 IP（`104.21.29.141` / `172.67.149.65`）
+- 流量路径：VPS → CF PoP（HK/SJC） → CF 内网 → Notion（无 GFW）
+
+**实施**（详见 plan `api-workers-twinkly-toast.md`）：
+1. Cloudflare Dashboard → Workers → 创建 `notion-proxy`（Service Worker 格式）
+2. Workers → Settings → Triggers → Add Custom Domain `notion-proxy.faiz-world.com`
+3. 容器 `/etc/hosts` 注入（用 `extra_hosts` 持久化，避免重启失效）
+4. n8n 节点 / Notion 节点 base URL 改为 `https://api.notion.com`（无需改，hosts 注入即可）
+
+**效果**：5/5 webhook 端到端成功（含容器重建后），成功率 100%。
+
+**被验证不可行的方案**：
+- ❌ notionfaster.org（改 hosts）：他们的 nginx stream 配置不含 `api.notion.com` upstream，5/5 全部 `unexpected eof while reading`
+- ❌ 客户端 UA 伪装 / 换 fetch 实现：同一网络出口下所有 HTTPS 客户端失败率一样
+- ❌ n8n 节点 `settings.retryOnFail`：对 "service refused" 视为致命错，不触发 retry
+- ❌ Code 节点中文键名（含 `客户邮箱`）：n8n API PUT 触发 server 500（jsCode 序列化 bug）
+
+**未来增强**：
+- 若 CF 边缘 IP 漂移，`getent ahosts notion-proxy.faiz-world.com` 刷新后更新 `docker-compose.yml` `extra_hosts`
+- 可加多 Worker route 跨多 PoP 做 failover
+- Notion Workers Beta（Business+ plan）若后续开通，可直接换 Notion 自家托管运行时
 
 ## 8. 已知限制 / 未来工作
 

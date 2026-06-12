@@ -13,7 +13,14 @@
 # 1. 编辑 .env，填入真实值
 vim .env
 
-# 2. 启动 n8n
+# 2. （可选）如果你在 GFW 环境下，需要 Cloudflare Worker 反代 Notion API：
+#    在 docker-compose.yml 的 n8n service 加 extra_hosts（持久化注入 hosts）：
+#      extra_hosts:
+#        - "api.notion.com:104.21.29.141"
+#        - "api.notion.com:172.67.149.65"
+#    详见 docs/ARCHITECTURE-payment.md §7.7
+
+# 3. 启动 n8n
 docker compose up -d
 
 # 3. 初始化 n8n
