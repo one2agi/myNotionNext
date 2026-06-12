@@ -276,7 +276,13 @@ Respond 200 {ok: true}
 - 用 Code 节点做 secret 校验（`$json.headers['x-n8n-secret']`），不要用 IF + `typeValidation: 'strict'`
 - 容器要 `TRUST_PROXY=true` 信任 nginx 注入的 X-Forwarded-For
 
-**端到端验证**：TEST-017 写入成功，Notion 新页面 URL `https://app.notion.com/p/Moran17-...`。
+**Notion API 不稳**（已知问题，5 次中 ~3 次 connection refused，疑似 VPS→Notion 出站被 GFW 间歇 reset）：
+- n8n 节点 `settings.retryOnFail + maxTries: 4` 对 "service refused" **不生效**（n8n 视为致命错而非网络错）
+- Code 节点手动 retry 走不通：n8n API PUT 含中文键名（`客户邮箱`）的 Code 节点 server 500
+- **当前接受 60-70% 成功率**，失败兜底：**查 n8n executions list 找 mode=error 的，补发 Notify**
+- 可选增强：EdgeOne KV 记录订单 + 周期 worker 比对 Notion 缺单 + 自动补发
+
+**端到端验证**：TEST-017 / RETRY2-01 / CODE-01 等多次写入成功，Notion 新页面 URL 形如 `https://app.notion.com/p/{name}-...`。
 
 ## 8. 已知限制 / 未来工作
 
