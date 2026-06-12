@@ -260,13 +260,32 @@ Respond 200 {ok: true}
 - `alreadyPaid(outTradeNo)` 在 notify.ts 层已保证，同一订单只转发一次 n8n
 - n8n 内部可选加 IF 节点查询 Notion 是否已存在订单号
 
+## 7.6 n8n 部署状态（2026-06-12 完工）
+
+**位置**：腾讯云 VPS `124.220.65.87`，跑在 `https://n8n.one2agi.com`（nginx + Let's Encrypt 反代）。
+
+**栈**：Docker 29.5.3（腾讯云 mirror 装）+ n8n 2.25.7 容器（**regular 模式，无 Redis/无 worker，单实例**）+ ufw 防火墙（22/80/443）。
+
+**EdgeOne Pages 环境变量**（用 `edgeone` CLI 1.5.9 配）：
+- `N8N_WEBHOOK_URL` = `https://n8n.one2agi.com/webhook/zpay-order`
+- `N8N_WEBHOOK_SECRET` = 64 位 hex
+
+**Workflow 关键 schema 经验**（n8n 2.25.7 / Notion v2 节点 `typeVersion: 2.2`）：
+- **必须** `resource: "databasePage"`（缺这个报 "Could not extract page ID from URL: undefined"）
+- `databaseId` 用 `__rl: true, value: <uuid>, mode: "id"` 包装
+- 用 Code 节点做 secret 校验（`$json.headers['x-n8n-secret']`），不要用 IF + `typeValidation: 'strict'`
+- 容器要 `TRUST_PROXY=true` 信任 nginx 注入的 X-Forwarded-For
+
+**端到端验证**：TEST-017 写入成功，Notion 新页面 URL `https://app.notion.com/p/Moran17-...`。
+
 ## 8. 已知限制 / 未来工作
 
 - **商品价格仍是测试金额**：`products.config.js` 当前为 10/30 分，待改回真实价格（7900/29900 分）。
 - **PaywallButton 未实现**：`STARTER_PAYWALL_ENABLE` 注释已标"本期未启用"，组件待后续接入。
 - **支付宝/银联未接入**：本期只接微信 Native 扫码。
 - **多实例不共享内存**：EdgeOne Cloud Function 可能多实例，`order-store` 跨实例不共享。单实例内幂等可保证业务正确；多实例不导致重复扣款（幂等检查在每个实例内独立完成）。
-- **n8n 可选增强**：queue 模式（高并发）、Sentry 上报、Dead Letter（Google Sheet 备用写入）
+- **n8n 单实例上限**：当前 regular 模式无 worker，订单并发 < 100/天足够；高并发需加 Redis + worker + `EXECUTIONS_MODE=queue`。
+- **n8n 可选增强**：Sentry 上报、Dead Letter（Google Sheet 备用写入）、`OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true`。
 
 ## 9. 参考
 

@@ -13,7 +13,7 @@
 # 1. 编辑 .env，填入真实值
 vim .env
 
-# 2. 启动 n8n + Redis
+# 2. 启动 n8n
 docker compose up -d
 
 # 3. 初始化 n8n
@@ -23,7 +23,16 @@ docker compose up -d
 # 4. 导入 workflow
 # Settings → Import from File → 选择 workflow-zpay-order.json
 
-# 5. 激活 workflow
+# 5. 配置 webhook secret
+# 打开 workflow → 双击 "Verify Secret" 节点
+# 把 `'{{ $env.N8N_WEBHOOK_SECRET }}'` 替换为你生成的 secret 字符串
+# （必须与 EdgeOne Pages 中的 N8N_WEBHOOK_SECRET 一致）
+
+# 6. 创建 Notion 凭证
+# 双击 "Create Notion Page" 节点 → Credential → Create New
+# 选 Notion API → 填入你的 internal integration API key
+
+# 7. 激活 workflow
 # 打开 workflow → 右上角 Toggle → Active
 ```
 
@@ -97,7 +106,10 @@ docker compose logs -f n8n
 | `N8N_HOST` | 是 | 你的 VPS 域名或 IP |
 | `N8N_ENCRYPTION_KEY` | 是 | 加密密钥，随机生成，**不要改** |
 | `SENTRY_DSN` | 否 | Sentry 上报，留空则禁用 |
-| `EXECUTIONS_MODE` | 否 | `queue` 开启 Redis 队列模式 |
+| `TRUST_PROXY` | 否 | `true` 信任 nginx X-Forwarded-For |
+
+> ⚠️ **当前部署走 single-instance 模式**（无 Redis、无 queue）。
+> 订单 < 100/天足够。后续要扩 worker，加回 redis 服务和 `EXECUTIONS_MODE=queue` 即可。
 
 ## 防火墙
 

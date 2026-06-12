@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   n8n:
     image: n8nio/n8n:latest
@@ -9,30 +8,16 @@ services:
       - N8N_HOST=${N8N_HOST}
       - WEBHOOK_URL=https://${N8N_HOST}/
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      # Queue mode (optional — enables retry and scaling)
-      - EXECUTIONS_MODE=queue
-      - QUEUE_BULL_REDIS_HOST=redis
+      # Trust nginx reverse proxy (forward X-Forwarded-For)
+      - TRUST_PROXY=true
       # Sentry (optional — leave empty to disable)
       - SENTRY_DSN=${SENTRY_DSN}
     volumes:
       - n8n_data:/home/node/.n8n
-    depends_on:
-      - redis
-    networks:
-      - n8n-network
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    networks:
-      - n8n-network
 
 volumes:
   n8n_data:
-  redis_data:
 
-networks:
-  n8n-network:
-    driver: bridge
+# Note: removed Redis + EXECUTIONS_MODE=queue.
+# Single instance is enough for current traffic (< 100 orders/day).
+# To scale out, add a worker container and switch to queue mode.
