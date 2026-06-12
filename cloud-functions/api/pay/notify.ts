@@ -66,28 +66,43 @@ export function verifySignRaw(request: Request, key: string): boolean {
 }
 
 /**
- * 转发已验证订单信息到 n8n（fire-and-forget，2s AbortController）
+ * 转发已验证订单信息到 n8n（fire-and-forget，8s AbortController）
  * n8n 负责写入 Notion 数据库
+ *
+ * 数据来源优先级：
+ * 1. order-store 内存记录（容器未冷启动时）→ 完整客户信息
+ * 2. Z-Pay 回调的 name 字段（"商品名-客户名" 格式，order-store miss 时解析）
+ * 3. fall back 到空字符串
  */
 async function forwardToN8n(
   outTradeNo: string,
   money: string,
+  zpayName: string,  // 新增：从 handle() 传入 Z-Pay 回调的 name 字段
   env: Record<string, string>
 ): Promise<void> {
   const webhookUrl = env.N8N_WEBHOOK_URL
   if (!webhookUrl) return
 
   const order = getOrder(outTradeNo)
-  const ci = order?.customerInfo ?? {
-    name: '',
-    email: '',
-    discountCode: undefined,
-    partnerName: undefined,
-    productName: '',
+  let ci = order?.customerInfo
+
+  // 兜底：order-store miss 时从 Z-Pay name 字段（"商品名-客户名"）解析
+  if (!ci || !ci.name) {
+    const lastDash = zpayName.lastIndexOf('-')
+    const parsedProduct = lastDash > 0 ? zpayName.slice(0, lastDash) : ''
+    const parsedCustomer = lastDash > 0 ? zpayName.slice(lastDash + 1) : zpayName
+    ci = {
+      name: parsedCustomer || '',
+      email: '',  // email 仍无法恢复（Z-Pay 回调不带）
+      productName: parsedProduct || '',
+      discountCode: undefined,
+      partnerName: undefined,
+    }
+    console.warn(`[notify] order-store miss for ${outTradeNo}, parsed from zpay name: ${zpayName} → product=${parsedProduct} customer=${parsedCustomer}`)
   }
 
   const ac = new AbortController()
-  const timer = setTimeout(() => ac.abort(), 2000)
+  const timer = setTimeout(() => ac.abort(), 8000)
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
@@ -157,7 +172,7 @@ async function handle(request: Request, env: Record<string, string>, isPost: boo
   console.log(`[notify] markPaid OK for ${outTradeNo} money=${money}`)
 
   // 转发到 n8n（fire-and-forget，不阻塞 success 回复）
-  forwardToN8n(outTradeNo, money, env)
+  forwardToN8n(outTradeNo, money, params.name ?? '', env)
 
   return successResponse()
 }
