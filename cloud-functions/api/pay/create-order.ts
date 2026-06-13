@@ -117,6 +117,24 @@ export async function onRequestPost(context: EventContext): Promise<Response> {
       notifyUrl: env.ZPAY_NOTIFY_URL!,
       env
     } as any)
+
+    // 立即调 Notion API 创建 page（状态="待发送"）—— 客户信息永不丢失
+    // 失败仅 console.warn，不阻塞响应（n8n 兜底 CREATE）
+    try {
+      const { createOrderPage } = await import('../../../lib/notion.js')
+      const notionResult = await createOrderPage({
+        outTradeNo,
+        name: customerName,
+        email: customer.email.trim(),
+        productName: product.name,
+        totalFen: finalPriceFen,
+        env: env as any,
+      })
+      console.log(`[create-order] Notion page created: ${notionResult.pageId} for ${outTradeNo}`)
+    } catch (e: any) {
+      console.warn(`[create-order] Notion write failed for ${outTradeNo} (n8n will 兜底): ${e?.message}`)
+    }
+
     return jsonResponse({
       outTradeNo,
       qrcode,
