@@ -7,10 +7,15 @@
 
 # testing
 /coverage
+/test-results
 
 # next.js
 /.next/
 /out/
+
+# vitepress (docs site)
+.vitepress/cache
+.vitepress/dist
 
 # production
 /build
@@ -27,6 +32,7 @@ yarn-error.log*
 # local env files
 .env
 .env.local
+.env.docs.local
 .env.development.local
 .env.test.local
 .env.production.local
@@ -56,6 +62,10 @@ package-lock.json
 # yarn.lock
 
 .notion-api-lock
+.tmp/
+.perf/
+tsconfig.tsbuildinfo
+webpack-internal:/
 
 # Test/build artifacts
 test-results/
