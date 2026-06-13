@@ -400,6 +400,11 @@ const nextConfig = {
       __dirname,
       'lib/utils/throttle.js'
     )
+    config.resolve.alias['@theme-components'] = path.resolve(
+      __dirname,
+      'themes',
+      BLOG.THEME
+    )
 
     if (!isServer) {
       console.log(
