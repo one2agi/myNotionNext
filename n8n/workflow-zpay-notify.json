@@ -1,0 +1,118 @@
+{
+  "name": "Z-Pay 回调处理",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notify",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-notify",
+      "name": "Webhook (notify)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "notify"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "discount-code-exists",
+                "leftValue": "{{ $json.discountCode }}",
+                "rightValue": "",
+                "operator": {"type": "string", "operation": "isNotEmpty"}
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "options": {}
+      },
+      "id": "if-discount-code",
+      "name": "IF: 有优惠码?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "databaseId": "37e4f4cf-c8e2-8073-aea5-f390b5b2c53d",
+        "filter": "{\"property\": {\"优惠码\": {\"rich_text\": {\"equals\": \"{{ $json.discountCode }}\"}}}}",
+        "options": {"limit": 1}
+      },
+      "id": "notion-search-discount",
+      "name": "Notion: 查询优惠码 Page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [750, 200]
+    },
+    {
+      "parameters": {
+        "pageId": "={{ $json.id }}",
+        "properties": {
+          "使用次数": {"number": "={{ $json.properties.使用次数.number + 1 }}"}
+        },
+        "options": {}
+      },
+      "id": "notion-update-discount-usage",
+      "name": "Notion: 使用次数 +1",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "databaseId": "6ab4f4cf-c8e2-825e-bde8-016c2d9be1c2",
+        "filter": "{\"property\": {\"订单号\": {\"rich_text\": {\"equals\": \"{{ $json.outTradeNo }}\"}}}}",
+        "options": {"limit": 1}
+      },
+      "id": "notion-search-order",
+      "name": "Notion: 查询订单 Page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [750, 400]
+    },
+    {
+      "parameters": {
+        "pageId": "={{ $json.id }}",
+        "properties": {
+          "购买日期": {"date": {"start": "{{ $json.paidAt }}"}}
+        },
+        "options": {}
+      },
+      "id": "notion-update-order-date",
+      "name": "Notion: 写入购买日期",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [1000, 400]
+    }
+  ],
+  "connections": {
+    "Webhook (notify)": {
+      "main": [[{"node": "IF: 有优惠码?", "type": "main", "index": 0}]]
+    },
+    "IF: 有优惠码?": {
+      "main": [
+        [{"node": "Notion: 查询优惠码 Page", "type": "main", "index": 0}],
+        [{"node": "Notion: 查询订单 Page", "type": "main", "index": 0}]
+      ]
+    },
+    "Notion: 查询优惠码 Page": {
+      "main": [[{"node": "Notion: 使用次数 +1", "type": "main", "index": 0}]]
+    },
+    "Notion: 使用次数 +1": {
+      "main": [[{"node": "Notion: 查询订单 Page", "type": "main", "index": 0}]]
+    },
+    "Notion: 查询订单 Page": {
+      "main": [[{"node": "Notion: 写入购买日期", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {},
+  "notes": "【模板】需要在 n8n UI 中打开并根据实际 field ID 调整。\n创建后导出覆盖本文件，进 git 管理。"
+}
