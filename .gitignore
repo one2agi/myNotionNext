@@ -77,3 +77,15 @@ tmp/
 
 # Claude Code local memory (per-project session state)
 memory/
+
+# === 防御性条目 ===
+# 通用日志文件（除已列出的 yarn-debug.log / npm-debug.log / yarn-error.log）
+*.log
+
+# IDE / OS 临时文件
+*.swp
+*.swo
+*~
+*.bak
+Thumbs.db
+ehthumbs.db

@@ -38,9 +38,9 @@
 GitHub push protection 拦截并报告：
 
 ```
-Notion API Token — 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
-Z-Pay Key — FFOiGaR1bNuOzVtHcUFYjfQ97VKH5ieP
-N8N_WEBHOOK_SECRET — 67e7993eb338e4911cfad0d3328eba1afe2112c2365a294224baaa9adab5b411
+Notion API Token — <redacted - see INFRASTRUCTURE.md>
+Z-Pay Key — <redacted - see INFRASTRUCTURE.md>
+N8N_WEBHOOK_SECRET — <redacted - see INFRASTRUCTURE.md>
 ```
 
 **泄漏位置**（commit e986b21b + 24c8d216，feat/discount-code-notion 分支）：
