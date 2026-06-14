@@ -8,7 +8,13 @@ try {
   sharp = require('sharp')
 } catch (error) {
   console.error(
-    'Missing optional dependency "sharp". Run: yarn add -D sharp'
+    'Missing dependency "sharp". This script is OPTIONAL (not used by yarn build / yarn export).'
+  )
+  console.error(
+    'To use this perf tool, install sharp locally: yarn add -D sharp'
+  )
+  console.error(
+    '(sharp is removed from package.json devDependencies because EdgeOne build container has limited /dev/shm disk, and yarn 1.x downloads all 24 sharp platform variants regardless of build target.)'
   )
   process.exit(1)
 }
