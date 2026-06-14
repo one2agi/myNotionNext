@@ -233,6 +233,153 @@ Content-Type: text/plain; charset=utf-8
 
 ---
 
+## 3.5 `GET /api/pay/query-order`
+
+**用途**：前端 PayModal 轮询订单支付状态（兜底 Z-Pay 异步回调）
+
+### 3.5.1 请求
+
+```
+GET /api/pay/query-order?outTradeNo=1750000000-abc123
+```
+
+### 3.5.2 响应 200（订单存在，未支付）
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "outTradeNo": "1750000000-abc123",
+    "paid": false,
+    "paidAt": null,
+    "productName": "知行合一 · 完整版",
+    "finalPrice": 69
+  }
+}
+```
+
+### 3.5.3 响应 200（订单已支付）
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "outTradeNo": "1750000000-abc123",
+    "paid": true,
+    "paidAt": "2026-06-14",
+    "productName": "知行合一 · 完整版",
+    "finalPrice": 69
+  }
+}
+```
+
+### 3.5.4 响应 404（订单不存在）
+
+```json
+{
+  "code": 40011,
+  "message": "E_ORDER_NOT_FOUND",
+  "data": null
+}
+```
+
+### 3.5.5 处理流程
+
+```
+1. 读 outTradeNo 参数
+2. 优先查 order-store.get(outTradeNo)
+   - 有 → 返回 paid 状态 + productName + finalPrice
+   - 无 → fallback 查 Notion 订单 DB
+3. fallback 也查不到 → 返回 404 E_ORDER_NOT_FOUND
+4. 整个流程不加任何外部限流（order-store 内存读，无压力）
+```
+
+### 3.5.6 性能规范
+
+- **接口位置**：EdgeOne Pages 函数（与 create-order 同位置）
+- **响应时间**：< 50ms（纯内存读）
+- **缓存策略**：无（数据量小，每次直接读 order-store）
+- **限流**：不需（只查自己生成的 outTradeNo）
+
+---
+
+## 3.6 `POST /api/pay/cancel-order`
+
+**用途**：用户主动取消未支付订单（前端 PayModal 取消按钮 / 5 分钟超时）
+
+### 3.6.1 请求
+
+```json
+{
+  "outTradeNo": "1750000000-abc123"
+}
+```
+
+### 3.6.2 响应 200（取消成功）
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "outTradeNo": "1750000000-abc123",
+    "cancelled": true
+  }
+}
+```
+
+### 3.6.3 响应 400（订单已支付，不能取消）
+
+```json
+{
+  "code": 40012,
+  "message": "E_ORDER_ALREADY_PAID",
+  "data": null
+}
+```
+
+### 3.6.4 响应 404（订单不存在）
+
+```json
+{
+  "code": 40011,
+  "message": "E_ORDER_NOT_FOUND",
+  "data": null
+}
+```
+
+### 3.6.5 处理流程
+
+```
+1. 读 outTradeNo
+2. 查 order-store
+   - 有 → 检查 paid 状态
+     - paid=true → return 400 E_ORDER_ALREADY_PAID（不能取消已付订单）
+     - paid=false → 从 order-store 删除 + POST n8n /webhook/cancel-order 删 Notion page（幂等）
+3. 查不到 → fallback 查 Notion 订单 DB
+   - Notion 有 → 标记 cancelled 状态 / 或删 page
+   - Notion 没 → return 404 E_ORDER_NOT_FOUND
+```
+
+### 3.6.6 错误码新增
+
+| code | message | 说明 |
+|------|---------|------|
+| 40012 | E_ORDER_ALREADY_PAID | 订单已支付，不能取消 |
+
+### 3.6.7 配套 n8n workflow
+
+需要新增 `POST /webhook/cancel-order` workflow，逻辑：
+- 查订单 DB by outTradeNo
+- 已支付 → 不动
+- 未支付 → 设置状态为"已取消" 或 删除 page（取决于产品决策）
+
+**MVP 推荐**：未支付订单不删 Notion page，**改状态为"已取消"**（保留审计记录）。
+
+---
+
 ## 4. Z-Pay 下单参数映射
 
 ### 4.1 EdgeOne → Z-Pay

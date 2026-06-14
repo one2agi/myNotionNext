@@ -16,7 +16,7 @@
 - **Cloudflare Worker 反代**：n8n 写 Notion 通过 CF Worker 绕 GFW
 - **避免过度设计**：不用额外消息队列、不用 KV 持久化 order-store（内存 Map 60min TTL 足够）
 - **order-store fallback**：容器冷启动时 order-store 为空，notify 回调时 fallback 查 Notion 订单 DB 作金额校验
-- **折扣计算在 EdgeOne**：lookup-discount 由 EdgeOne 直连 Notion 查询（快，前置校验用）
+- **折扣计算在 EdgeOne**：优惠码查询与折扣计算在 `create-order` 流程内一并完成（EdgeOne → `lib/discount-codes.ts` → Notion 优惠码 DB），**不提供独立的 `lookup-discount` API**（避免优惠码枚举风险）
 
 ### 1.2 整体数据流
 
@@ -89,6 +89,15 @@
 ---
 
 ## 3. API 规格
+
+> **完整 API 规格见 `PAYMENT-API-SPEC.md`**，本节仅列概要。
+
+| 端点 | 用途 | 详细规格 |
+|------|------|---------|
+| `POST /api/pay/create-order` | 创建订单，返回 qrcode | §3.1 本节 |
+| `GET /api/pay/notify` | Z-Pay 异步回调 | §3.2 本节 |
+| `GET /api/pay/query-order` | 前端轮询订单状态（兜底） | `PAYMENT-API-SPEC.md` §3.5 |
+| `POST /api/pay/cancel-order` | 取消未支付订单 | `PAYMENT-API-SPEC.md` §3.6 |
 
 ### 3.1 `POST /api/pay/create-order`
 
@@ -408,7 +417,7 @@ setInterval(() => {
 | 参数校验失败 | 400 | `{ error: "E_XXX" }` | 弹表单错误提示 |
 | ZPay 下单失败 | 500 | `{ error: "E_ZPAY_FAIL" }` | 弹"支付创建失败" |
 | n8n webhook 失败 | 200 | 仍返 qrcode（异步写入不阻塞） | 不影响支付，后续人工补 |
-| Notion 查询失败（lookup-discount） | 500 | `{ error: "E_NOTION_FAIL" }` | 弹"优惠码校验失败" |
+| Notion 查询失败（create-order 内的优惠码查询） | 500 | `{ error: "E_NOTION_FAIL" }` | 弹"优惠码校验失败" |
 | Notion 查询失败（order-store miss fallback） | 500 | `order not found` | 内存+DB 都查不到，不处理该回调 |
 | 金额校验失败 | 400 | `amount mismatch` | 不写 Notion，ZPay 不重发 |
 
@@ -466,6 +475,92 @@ setInterval(() => {
 ```
 NOTION_DISCOUNT_DATABASE_ID=37e4f4cf-c8e2-8073-aea5-f390b5b2c53d
 ```
+
+---
+
+## 12.5 环境变量集中校验（lib/env.ts）
+
+**目的**：启动时一次性校验所有 env 变量，缺一即抛错，避免运行时才暴露。
+
+### 12.5.1 设计原则
+
+- ✅ **Fail Fast**：缺少 env 时**启动失败**而不是运行时 500
+- ✅ **集中位置**：所有 env 在 `lib/env.ts` 一个文件
+- ✅ **类型安全**：导出类型化的 `env` 对象，IDE 自动补全
+- ✅ **运行时 + 构建时**：开发模式启动即校验，build 时也校验
+
+### 12.5.2 实现
+
+```typescript
+// lib/env.ts
+interface EnvSchema {
+  ZPAY_PID: string
+  ZPAY_KEY: string
+  ZPAY_NOTIFY_URL: string
+  N8N_WEBHOOK_URL: string
+  N8N_WEBHOOK_SECRET: string
+  NOTION_TOKEN: string
+  NOTION_DATABASE_ID: string
+  NOTION_DISCOUNT_DATABASE_ID: string  // 新增
+}
+
+const SCHEMA: Array<[keyof EnvSchema, boolean]> = [
+  ['ZPAY_PID', true],
+  ['ZPAY_KEY', true],
+  ['ZPAY_NOTIFY_URL', true],
+  ['N8N_WEBHOOK_URL', true],
+  ['N8N_WEBHOOK_SECRET', true],
+  ['NOTION_TOKEN', true],
+  ['NOTION_DATABASE_ID', true],
+  ['NOTION_DISCOUNT_DATABASE_ID', true],  // 必填，2026-06-14 新增
+]
+
+function validateEnv(): EnvSchema {
+  const missing: string[] = []
+  const result = {} as any
+  for (const [key, required] of SCHEMA) {
+    const value = process.env[key]
+    if (required && !value) missing.push(key)
+    if (value) result[key] = value
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[env] Missing required env variables: ${missing.join(', ')}\n` +
+      `Please set them in EdgeOne console or .env.local`
+    )
+  }
+  return result as EnvSchema
+}
+
+export const env = validateEnv()
+```
+
+### 12.5.3 使用方式
+
+```typescript
+// pages/api/pay/create-order.ts
+import { env } from '@/lib/env'
+
+// 旧：process.env.ZPAY_KEY（运行时才发现缺）
+// 新：env.ZPAY_KEY（启动时已校验）
+const zpayKey = env.ZPAY_KEY
+```
+
+### 12.5.4 教训背景
+
+2026-06-14 上线 `NOTION_DISCOUNT_DATABASE_ID` 时**漏配 EdgeOne 控制台**：
+- 现象：create-order 返回 `E_NOTION_FAIL`（500）
+- 排查：30 分钟
+- 根因：env 分散在 3 处（代码、文档、控制台），无启动时校验
+- 修复：加 `lib/env.ts` 启动即报错，**0 排查时间**
+
+### 12.5.5 备选方案（暂不实施）
+
+- **方案 B**：用 `zod` 库做运行时 schema 校验
+- **方案 C**：在 CI/CD 加 env 完整性检查脚本
+- **方案 D**：本地用 `dotenv` + 启动脚本
+
+**当前选 A**：最简方案，TypeScript 原生，0 依赖。
 
 ---
 

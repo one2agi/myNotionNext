@@ -10,7 +10,7 @@
 
 ## 1. 设计目标
 
-把 starter 主题的 Pricing 区域从纯静态链接改为**触发 PayModal**，用户填表 → 调 `create-order` API → 拿二维码 → 微信扫码 → 3s 轮询订单状态 → 支付成功关闭弹窗。
+把 starter 主题的 Pricing 区域从纯静态链接改为**触发 PayModal**，用户填表 → 调 `create-order` API → 拿二维码 → 微信扫码 → **5s 轮询**订单状态 → 支付成功关闭弹窗。
 
 ---
 
@@ -28,7 +28,7 @@
 [5] EdgeOne 校验 + 调 ZPay + 发 n8n webhook
         ↓ return { outTradeNo, qrcode, productName, finalPrice, ... }
 [6] PayModal 显示二维码（qrcode 字段）
-        ↓ 自动 3s 轮询订单状态
+        ↓ 自动 5s 轮询订单状态
 [7] 用户微信扫码支付
         ↓
 [8] ZPay 异步回调 EdgeOne /api/pay/notify
@@ -149,10 +149,10 @@ type PayModalState = {
 | 交互 | 触发 | 行为 |
 |------|------|------|
 | 打开 Modal | Pricing 按钮 onClick | `setStep('form')` + 重置 state |
-| 输入优惠码 | onBlur (debounce 500ms) | 调 `lookup-discount` API（可选）或调 `create-order` 时一并校验 |
+| 输入优惠码 | onBlur (debounce 500ms) | **不调任何 API**（避免优惠码枚举风险）→ 仅在 create-order 提交时一并校验 |
 | 提交表单 | onClick "立即支付" | `POST /api/pay/create-order` |
-| 显示二维码 | API 返回成功 | `setStep('qrcode')` + 启动 3s 轮询 |
-| 轮询 | setInterval 3s | `GET /api/pay/query-order?outTradeNo=xxx` |
+| 显示二维码 | API 返回成功 | `setStep('qrcode')` + 启动 5s 轮询 |
+| 轮询 | setInterval **5s** | `GET /api/pay/query-order?outTradeNo=xxx` |
 | 检测支付成功 | 轮询返回 `paid=true` | `setStep('success')` + 清除 interval |
 | 用户取消 | onClick "取消订单" | 关闭 modal + 清除 interval + 清空 state |
 | 错误 | API 返 4xx/5xx | `setStep('error')` + 显示 errorMessage |
@@ -217,15 +217,22 @@ useEffect(() => {
       setStep('success')
       clearInterval(timer)
     }
-  }, 3000)
+  }, 5000)  // 5s 间隔（业界主流：Stripe/PayPal 标准 5-10s）
   return () => clearInterval(timer)
 }, [step, outTradeNo])
 ```
 
+**为什么是 5s 不是 3s**：
+- ✅ 微信支付官方推荐"回调 + 轮询兜底"组合
+- ✅ Stripe/PayPal 等业界标准 5-10s
+- ✅ 100 用户 = 720 次/小时（vs 3s = 1200 次/小时，省 40%）
+- ✅ 5s 延迟用户感知不到（扫码本来就要操作）
+
 ### 6.3 超时处理
 
-- 5 分钟（100 次轮询）未支付 → 提示"订单超时"
+- 5 分钟（60 次轮询）未支付 → 提示"订单超时"
 - 用户可关闭 modal 或重新发起
+- **超时后自动调 `POST /api/pay/cancel-order`**（避免遗留订单）
 
 ---
 
@@ -291,14 +298,22 @@ useEffect(() => {
 
 ## 13. 待补 API
 
-**`GET /api/pay/query-order`** 当前**未实现**！需要新建：
+| API | 状态 | 规格位置 |
+|-----|------|---------|
+| `GET /api/pay/query-order` | 🆕 已设计，待实现 | `PAYMENT-API-SPEC.md` §3.5 |
+| `POST /api/pay/cancel-order` | 🆕 已设计，待实现 | `PAYMENT-API-SPEC.md` §3.6 |
 
-```
-pages/api/pay/query-order.ts
-- 从 order-store 查 paid 状态
+**`pages/api/pay/query-order.ts` 实现要点**：
+- 从 `order-store` 查 paid 状态
 - fallback 查 Notion 订单 DB
-- 返回 { paid, paidAt, productName, finalPrice }
-```
+- 返回 `{ paid, paidAt, productName, finalPrice }`
+- 完整规格见 `PAYMENT-API-SPEC.md` §3.5
+
+**`pages/api/pay/cancel-order.ts` 实现要点**：
+- 删除 order-store 中未支付订单
+- POST n8n `/webhook/cancel-order` 标记 Notion 为"已取消"
+- 已支付订单禁止取消（返回 E_ORDER_ALREADY_PAID）
+- 完整规格见 `PAYMENT-API-SPEC.md` §3.6
 
 ---
 
