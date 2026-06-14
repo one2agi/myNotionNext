@@ -19,6 +19,9 @@ interface OrderRecord {
   finalPrice: number      // 元，ZPay 下单金额
   createdAt: number       // timestamp（ms）
   paid: boolean
+  paidAt?: string        // ISO 日期字符串，支付时间（notify 回调时写入）
+  cancelled?: boolean     // 已取消标记（cancel-order 时写入，防 notify race）
+  cancelledAt?: number   // 取消时间戳（ms）
 }
 
 /**
@@ -62,11 +65,26 @@ export const orderStore = {
 
   /**
    * 标记订单为已支付（幂等）
+   * @param outTradeNo 订单号
+   * @param paidAt ISO 日期字符串（可选，默认当前时间）
    */
-  markPaid(outTradeNo: string): boolean {
+  markPaid(outTradeNo: string, paidAt?: string): boolean {
     const record = store.get(outTradeNo)
     if (!record) return false
     record.paid = true
+    record.paidAt = paidAt ?? new Date().toISOString().slice(0, 10)
+    return true
+  },
+
+  /**
+   * 标记订单为已取消（防 notify race）
+   * @param outTradeNo 订单号
+   */
+  markCancelled(outTradeNo: string): boolean {
+    const record = store.get(outTradeNo)
+    if (!record) return false
+    record.cancelled = true
+    record.cancelledAt = Date.now()
     return true
   },
 
@@ -75,6 +93,13 @@ export const orderStore = {
    */
   isPaid(outTradeNo: string): boolean {
     return store.get(outTradeNo)?.paid ?? false
+  },
+
+  /**
+   * 检查订单是否已取消
+   */
+  isCancelled(outTradeNo: string): boolean {
+    return store.get(outTradeNo)?.cancelled ?? false
   },
 }
 

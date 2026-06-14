@@ -278,6 +278,10 @@ const CONFIG = {
   STARTER_NEWSLETTER: false,
 
   // ===== Paywall =====
-  STARTER_PAYWALL_ENABLE: true // 本期未启用 PaywallButton,待后续接入
+  STARTER_PAYWALL_ENABLE: true, // 本期未启用 PaywallButton,待后续接入
+
+  // ===== 支付相关 productId 配置（遵循 PAYMENT-FRONTEND-DESIGN.md §3.3）=====
+  STARTER_PRICING_2_PRODUCT_ID: 'starter-full',
+  STARTER_PRICING_3_PRODUCT_ID: 'pro-full',
 }
 export default CONFIG

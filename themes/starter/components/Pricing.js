@@ -1,11 +1,20 @@
 import { siteConfig } from '@/lib/config'
 import SmartLink from '@/components/SmartLink'
+import { usePayModal } from './PayModalProvider'
 
 /**
  * 价格板块
+ *
+ * PRICING_1（免费版）：保持 SmartLink
+ * PRICING_2 / PRICING_3（付费版）：改为 onClick 触发 PayModal
+ *
+ * 遵循 PAYMENT-FRONTEND-DESIGN.md §3.2
+ *
  * @returns
  */
 export const Pricing = () => {
+  const { openPayModal } = usePayModal()
+
   return (
     <>
       {/* <!-- ====== Pricing Section Start --> */}
@@ -118,11 +127,15 @@ export const Pricing = () => {
                       })}
                   </div>
                 </div>
-                <SmartLink
-                  href={siteConfig('STARTER_PRICING_2_BUTTON_URL', '')}
-                  className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
+                <button
+                  onClick={() => openPayModal({
+                    productId: siteConfig('STARTER_PRICING_2_PRODUCT_ID', 'starter-full'),
+                    productName: siteConfig('STARTER_PRICING_2_TITLE', '知行合一 · 完整版'),
+                    totalPrice: parseFloat(siteConfig('STARTER_PRICING_2_PRICE', '79')),
+                  })}
+                  className='inline-block w-full rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
                   {siteConfig('STARTER_PRICING_2_BUTTON_TEXT')}
-                </SmartLink>
+                </button>
               </div>
             </div>
 
@@ -162,11 +175,15 @@ export const Pricing = () => {
                       })}
                   </div>
                 </div>
-                <SmartLink
-                  href={siteConfig('STARTER_PRICING_3_BUTTON_URL', '')}
-                  className='inline-block rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
+                <button
+                  onClick={() => openPayModal({
+                    productId: siteConfig('STARTER_PRICING_3_PRODUCT_ID', 'pro-full'),
+                    productName: siteConfig('STARTER_PRICING_3_TITLE', '启动陪跑'),
+                    totalPrice: parseFloat(siteConfig('STARTER_PRICING_3_PRICE', '299')),
+                  })}
+                  className='inline-block w-full rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white transition hover:bg-blue-dark'>
                   {siteConfig('STARTER_PRICING_3_BUTTON_TEXT')}
-                </SmartLink>
+                </button>
               </div>
             </div>
           </div>
