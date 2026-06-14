@@ -3,7 +3,7 @@
 > 📋 **目的**：定义 starter 主题 Pricing 区域 + PayModal 弹窗的前端 UX
 > **版本**：v1.0
 > **最后更新**：2026-06-14
-> **状态**：待实现
+> **状态**：✅ 已实现
 > **配合文档**：`PAYMENT-ARCHITECTURE.md` / `PAYMENT-API-SPEC.md`
 
 ---
@@ -296,22 +296,23 @@ useEffect(() => {
 
 ---
 
-## 13. 待补 API
+## 13. 已实现 API
 
-| API | 状态 | 规格位置 |
-|-----|------|---------|
-| `GET /api/pay/query-order` | 🆕 已设计，待实现 | `PAYMENT-API-SPEC.md` §3.5 |
-| `POST /api/pay/cancel-order` | 🆕 已设计，待实现 | `PAYMENT-API-SPEC.md` §3.6 |
+| API | 文件 | 状态 | 说明 |
+|-----|------|------|------|
+| `GET /api/pay/query-order` | `pages/api/pay/query-order.ts` | ✅ 已实现 | order-store优先 + Notion fallback |
+| `POST /api/pay/cancel-order` | `pages/api/pay/cancel-order.ts` | ✅ 已实现 | markCancelled + n8n webhook + ZPay close |
 
-**`pages/api/pay/query-order.ts` 实现要点**：
-- 从 `order-store` 查 paid 状态
-- fallback 查 Notion 订单 DB
-- 返回 `{ paid, paidAt, productName, finalPrice }`
+**`query-order.ts` 实现要点**：
+- 优先查 `order-store.get(outTradeNo)`，返回 paid 状态 + productName + finalPrice
+- order-store miss 时 fallback 查 Notion 订单 DB（购买日期存在 = 已支付）
+- 返回 `{ paid, paidAt, productName, finalPrice, unit: "元" }`
 - 完整规格见 `PAYMENT-API-SPEC.md` §3.5
 
-**`pages/api/pay/cancel-order.ts` 实现要点**：
-- 删除 order-store 中未支付订单
-- POST n8n `/webhook/cancel-order` 标记 Notion 为"已取消"
+**`cancel-order.ts` 实现要点**：
+- `orderStore.markCancelled(outTradeNo)` 防 notify race（先于 notify 标记）
+- POST n8n `/webhook/cancel-order` 改 Notion 状态为"已取消"
+- 调用 ZPay `https://z-pay.cn/api.php?act=close` 关闭订单
 - 已支付订单禁止取消（返回 E_ORDER_ALREADY_PAID）
 - 完整规格见 `PAYMENT-API-SPEC.md` §3.6
 
@@ -320,14 +321,16 @@ useEffect(() => {
 ## 14. 文件清单
 
 ```
-新增：
-- pages/api/pay/query-order.ts         # 订单状态查询
-- themes/starter/components/PayModal.js  # 支付弹窗组件
+新增（已实现）：
+- pages/api/pay/query-order.ts              # 订单状态查询
+- pages/api/pay/cancel-order.ts              # 取消订单
+- themes/starter/components/PayModal.js      # 支付弹窗组件
+- themes/starter/components/PayModalProvider.js # Context provider
 
 修改：
-- themes/starter/components/Pricing.js    # 按钮改 onClick 触发 modal
-- themes/starter/config.js                # 新增 productId 配置
-- themes/starter/index.js 或 theme.js     # 引入 PayModal（可选）
+- themes/starter/components/Pricing.js      # 按钮改 onClick 触发 modal
+- themes/starter/config.js                   # 新增 productId 配置
+- themes/starter/index.js 或 theme.js        # 引入 PayModal（可选）
 ```
 
 ---
@@ -344,6 +347,8 @@ useEffect(() => {
 - [ ] 支付完成 → 自动跳成功页
 - [ ] 5 分钟超时 → 提示订单超时
 - [ ] 移动端 modal 显示正常
+- [ ] query-order 轮询正常工作
+- [ ] cancel-order 取消订单正常工作
 
 ---
 

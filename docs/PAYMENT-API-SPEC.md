@@ -254,7 +254,8 @@ GET /api/pay/query-order?outTradeNo=1750000000-abc123
     "paid": false,
     "paidAt": null,
     "productName": "知行合一 · 完整版",
-    "finalPrice": 69
+    "finalPrice": 69,
+    "unit": "元"
   }
 }
 ```
@@ -270,7 +271,8 @@ GET /api/pay/query-order?outTradeNo=1750000000-abc123
     "paid": true,
     "paidAt": "2026-06-14",
     "productName": "知行合一 · 完整版",
-    "finalPrice": 69
+    "finalPrice": 69,
+    "unit": "元"
   }
 }
 ```
@@ -357,11 +359,18 @@ GET /api/pay/query-order?outTradeNo=1750000000-abc123
 2. 查 order-store
    - 有 → 检查 paid 状态
      - paid=true → return 400 E_ORDER_ALREADY_PAID（不能取消已付订单）
-     - paid=false → 从 order-store 删除 + POST n8n /webhook/cancel-order 删 Notion page（幂等）
+     - cancelled=true → 幂等 return 200（已取消）
+     - paid=false → markCancelled（防 notify race） + POST n8n /webhook/cancel-order + 调 ZPay close + return 200
 3. 查不到 → fallback 查 Notion 订单 DB
-   - Notion 有 → 标记 cancelled 状态 / 或删 page
+   - Notion 状态=已发送 → return 400 E_ORDER_ALREADY_PAID
+   - Notion 状态=已取消 → 幂等 return 200
+   - Notion 状态=待发送 → POST n8n /webhook/cancel-order + return 200
    - Notion 没 → return 404 E_ORDER_NOT_FOUND
 ```
+
+**幂等设计**：
+- 同一 outTradeNo 多次 cancel：order-store 已删 → Notion fallback → 状态已是"已取消" → 返 200
+- cancel 与 notify race：先 markCancelled（设置 cancelled=true）防 notify 写入
 
 ### 3.6.6 错误码新增
 
@@ -371,12 +380,14 @@ GET /api/pay/query-order?outTradeNo=1750000000-abc123
 
 ### 3.6.7 配套 n8n workflow
 
-需要新增 `POST /webhook/cancel-order` workflow，逻辑：
-- 查订单 DB by outTradeNo
-- 已支付 → 不动
-- 未支付 → 设置状态为"已取消" 或 删除 page（取决于产品决策）
+**已实现**：`n8n/workflow-cancel-order.json`
 
-**MVP 推荐**：未支付订单不删 Notion page，**改状态为"已取消"**（保留审计记录）。
+逻辑：
+- 查订单 DB by outTradeNo
+- IF: 状态 != 已发送? → Yes 继续，No 幂等跳过
+- IF: 状态 != 已取消? → Yes 改状态为"已取消"，No 幂等跳过
+
+**幂等保证**：两层 IF 判断（已发送/已取消）避免重复 UPDATE。
 
 ---
 
@@ -472,13 +483,13 @@ const PRODUCTS = {
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
 | ZPAY_PID | Z-Pay 商户 ID | 2026050116254529 |
-| ZPAY_KEY | Z-Pay 签名密钥 | FFOiGaR1bNuOzVtHcUFYjfQ97VKH5ieP |
+| ZPAY_KEY | Z-Pay 签名密钥 | `<redacted - see INFRASTRUCTURE.md>` |
 | ZPAY_NOTIFY_URL | 回调地址 | https://www.one2agi.com/api/pay/notify |
-| NOTION_TOKEN | Notion API Token | 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 |
+| NOTION_TOKEN | Notion API Token | `<redacted - see INFRASTRUCTURE.md>` |
 | NOTION_DATABASE_ID | 订单数据库 ID | 6ab4f4cf-c8e2-825e-bde8-016c2d9be1c2 |
 | NOTION_DISCOUNT_DATABASE_ID | 优惠码数据库 ID | 37e4f4cf-c8e2-8073-aea5-f390b5b2c53d |
 | N8N_WEBHOOK_URL | n8n Webhook 基础 URL | https://n8n.one2agi.com/webhook |
-| N8N_WEBHOOK_SECRET | n8n Webhook 鉴权 Secret | 67e7993eb338e4911cfad0d3328eba1afe2112c2365a294224baaa9adab5b411 |
+| N8N_WEBHOOK_SECRET | n8n Webhook 鉴权 Secret | `<redacted - see INFRASTRUCTURE.md>` |
 
 ---
 

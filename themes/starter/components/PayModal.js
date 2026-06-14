@@ -19,6 +19,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { usePayModal } from './PayModalProvider'
+import { DISCOUNT_CODE_REGEX } from '@/lib/discount-codes'
 
 /** 错误码 → 用户文案映射（遵循 FRONTEND §7） */
 const ERROR_MESSAGES = {
@@ -34,10 +35,10 @@ const ERROR_MESSAGES = {
   E_NOTION_FAIL: '系统繁忙，请稍后再试',
   E_INTERNAL: '系统繁忙，请稍后再试',
   E_PARAM_MISSING: '参数错误',
+  E_ORDER_ALREADY_PAID: '订单已支付，无法取消',
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const DISCOUNT_CODE_REGEX = /^[A-Z0-9\-]{6,20}$/
 
 /**
  * 获取错误用户提示文案
@@ -64,9 +65,11 @@ export function PayModal() {
     qrcode,
     imgUrl,
     errorMessage,
+    cancelError,    // HIGH 1
     closePayModal,
     submitForm,
     cancelOrder,
+    clearCancelError, // HIGH 1
   } = usePayModal()
 
   // 表单字段
@@ -200,6 +203,11 @@ export function PayModal() {
               填写以下信息获取购买链接
             </p>
 
+            {/* H3 安全提示：前端价格可被 DevTools 篡改，以 Z-Pay 实际收款金额为准 */}
+            <p className="text-xs text-gray-400 dark:text-dark-6 mb-4 italic">
+              * 最终支付金额以 Z-Pay 实际收款为准
+            </p>
+
             <form onSubmit={handleSubmit} className="space-y-4">
               {/* 姓名 */}
               <div>
@@ -310,6 +318,19 @@ export function PayModal() {
               </p>
               <p className="text-xs text-gray-400">二维码有效期 5 分钟</p>
             </div>
+
+            {/* HIGH 1: 取消失败错误提示 */}
+            {cancelError && (
+              <div className="mb-4 rounded-md bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400">
+                <p>{cancelError}</p>
+                <button
+                  onClick={clearCancelError}
+                  className="mt-1 text-xs underline hover:no-underline"
+                >
+                  知道了
+                </button>
+              </div>
+            )}
 
             {/* 取消按钮 */}
             <button

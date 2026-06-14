@@ -22,7 +22,7 @@ interface DiscountCodeRecord {
 }
 
 /** 优惠码格式校验：A-Z 0-9 -，6-20字符 */
-const DISCOUNT_CODE_REGEX = /^[A-Z0-9\-]{6,20}$/
+export const DISCOUNT_CODE_REGEX = /^[A-Z0-9\-]{6,20}$/
 
 /** 创建带错误码的业务错误（用于 throw） */
 function discountError(code: string): never {

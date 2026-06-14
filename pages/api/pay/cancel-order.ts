@@ -4,13 +4,21 @@
  * 用途：用户主动取消未支付订单（前端 PayModal 取消按钮 / 5 分钟超时自动调用）
  *
  * 处理流程（遵循 PAYMENT-API-SPEC.md §3.6）：
- * 1. 读 outTradeNo
- * 2. 查 order-store：
- *    - 有 → 检查 paid 状态
+ * 1. Origin 校验（同源 + allow list）— 防跨站任意调用
+ * 2. IP 限速（60 req/min）— 防自家 DoS
+ * 3. outTradeNo 白名单校验（字符集 + 长度）— 防 Notion 配额滥用
+ * 4. 读 { outTradeNo, customer: { email } }
+ * 5. 查 order-store：
+ *    - 有 → 校验 email 匹配 + 检查 paid 状态
  *      - paid=true → return 400 E_ORDER_ALREADY_PAID
- *      - paid=false → markCancelled + 发 n8n webhook + 删除 order-store
- * 3. 查不到 → fallback 查 Notion 订单 DB
- *    - Notion 有 → 发 n8n webhook（改状态为"已取消"）
+ *      - paid=false → markCancelled + 发 n8n webhook + 关闭 Z-Pay
+ *    - 邮箱不匹配 → 403 E_EMAIL_MISMATCH
+ * 6. 查不到 → fallback 查 Notion 订单 DB
+ *    - Notion 有 → 校验状态（用 NotionOrderStatus enum）
+ *      - SHIPPED → 400 E_ORDER_ALREADY_PAID
+ *      - CANCELLED → 200 幂等
+ *      - PENDING → 发 n8n webhook（改状态为"已取消"）
+ *      - 未知状态 → 409 E_STATUS_UNKNOWN
  *    - Notion 没 → return 404 E_ORDER_NOT_FOUND
  *
  * 幂等设计（遵循 PAYMENT-IMPLEMENTATION-NOTES.md B.2）：
@@ -24,27 +32,28 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import { orderStore } from '@/lib/order-store'
 import {
   getNotionProperty,
-  getRichText,
   type NotionPropertyValue,
 } from '@/lib/notion-utils'
+import { checkOrigin, validateOutTradeNo, rateLimit, getClientIp } from '@/lib/security'
+import { ErrorCode, NotionOrderStatus, parseNotionOrderStatus } from '@/lib/errors'
 
-// ============= 错误码 =============
-const ErrorCode = {
-  E_ORDER_NOT_FOUND: 40011,
-  E_ORDER_ALREADY_PAID: 40012,
-  E_INTERNAL: 50001,
-  E_METHOD_NOT_ALLOWED: 40501,
-  E_PARAM_MISSING: 40000,
-} as const
+/** 邮箱格式校验：RFC 5322 简化版 */
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const EMAIL_MAX_LENGTH = 254
 
 // ============= 响应类型 =============
 type CancelOrderResponse =
   | { code: 0; message: 'success'; data: { outTradeNo: string; cancelled: true } }
   | { code: typeof ErrorCode.E_ORDER_NOT_FOUND; message: 'E_ORDER_NOT_FOUND'; data: null }
   | { code: typeof ErrorCode.E_ORDER_ALREADY_PAID; message: 'E_ORDER_ALREADY_PAID'; data: null }
+  | { code: typeof ErrorCode.E_STATUS_UNKNOWN; message: 'E_STATUS_UNKNOWN'; data: null }
+  | { code: typeof ErrorCode.E_EMAIL_MISMATCH; message: 'E_EMAIL_MISMATCH'; data: null }
   | { code: typeof ErrorCode.E_INTERNAL; message: 'E_INTERNAL'; data: null }
   | { code: typeof ErrorCode.E_METHOD_NOT_ALLOWED; message: 'E_METHOD_NOT_ALLOWED'; data: null }
   | { code: typeof ErrorCode.E_PARAM_MISSING; message: 'E_PARAM_MISSING'; data: null }
+  | { code: typeof ErrorCode.E_PARAM_INVALID; message: 'E_PARAM_INVALID'; data: null }
+  | { code: typeof ErrorCode.E_ORIGIN_FORBIDDEN; message: 'E_ORIGIN_FORBIDDEN'; data: null }
+  | { code: typeof ErrorCode.E_RATE_LIMITED; message: 'E_RATE_LIMITED'; data: null }
 
 // ============= Z-Pay 关闭订单 =============
 /**
@@ -187,9 +196,50 @@ export default async function handler(
     })
   }
 
-  const { outTradeNo } = req.body as { outTradeNo?: string }
+  // ---- 0. Origin 校验（防跨站调用）----
+  if (!checkOrigin(req)) {
+    return res.status(403).json({
+      code: ErrorCode.E_ORIGIN_FORBIDDEN,
+      message: 'E_ORIGIN_FORBIDDEN',
+      data: null,
+    })
+  }
+
+  // ---- 0b. IP 限速（60 req/min）----
+  const clientIp = getClientIp(req)
+  if (!rateLimit(clientIp)) {
+    res.setHeader('Retry-After', '60')
+    return res.status(429).json({
+      code: ErrorCode.E_RATE_LIMITED,
+      message: 'E_RATE_LIMITED',
+      data: null,
+    })
+  }
+
+  const body = req.body as { outTradeNo?: string; customer?: { email?: string } } | undefined
+  const { outTradeNo } = body ?? {}
+  const customerEmail = body?.customer?.email
 
   if (!outTradeNo || typeof outTradeNo !== 'string') {
+    return res.status(400).json({
+      code: ErrorCode.E_PARAM_MISSING,
+      message: 'E_PARAM_MISSING',
+      data: null,
+    })
+  }
+
+  // ---- 0c. outTradeNo 白名单校验（字符集 + 长度）----
+  const validation = validateOutTradeNo(outTradeNo)
+  if (!validation.valid) {
+    return res.status(400).json({
+      code: ErrorCode.E_PARAM_INVALID,
+      message: 'E_PARAM_INVALID',
+      data: null,
+    })
+  }
+
+  // ---- 0d. 邮箱校验（order-store 命中时必查）----
+  if (!customerEmail || typeof customerEmail !== 'string' || !EMAIL_REGEX.test(customerEmail) || customerEmail.length > EMAIL_MAX_LENGTH) {
     return res.status(400).json({
       code: ErrorCode.E_PARAM_MISSING,
       message: 'E_PARAM_MISSING',
@@ -202,7 +252,16 @@ export default async function handler(
     const cached = orderStore.get(outTradeNo)
 
     if (cached) {
-      // ---- 1a. 已支付订单不能取消 ----
+      // ---- 1a. 邮箱归属校验（H2 修复）----
+      if (cached.customerEmail.toLowerCase() !== customerEmail.toLowerCase()) {
+        return res.status(403).json({
+          code: ErrorCode.E_EMAIL_MISMATCH,
+          message: 'E_EMAIL_MISMATCH',
+          data: null,
+        })
+      }
+
+      // ---- 1b. 已支付订单不能取消 ----
       if (cached.paid) {
         return res.status(400).json({
           code: ErrorCode.E_ORDER_ALREADY_PAID,
@@ -211,7 +270,7 @@ export default async function handler(
         })
       }
 
-      // ---- 1b. 已取消订单幂等返回 ----
+      // ---- 1c. 已取消订单幂等返回 ----
       if (cached.cancelled) {
         return res.status(200).json({
           code: 0,
@@ -220,21 +279,16 @@ export default async function handler(
         })
       }
 
-      // ---- 1c. 未支付 → markCancelled（防 notify race）----
+      // ---- 1d. 未支付 → markCancelled（防 notify race）----
       orderStore.markCancelled(outTradeNo)
 
-      // ---- 1d. 发 n8n webhook 改 Notion 状态为"已取消" ----
+      // ---- 1e. 发 n8n webhook 改 Notion 状态为"已取消" ----
       await notifyN8nCancelOrder(outTradeNo)
 
-      // ---- 1e. 关闭 Z-Pay 订单 ----
+      // ---- 1f. 关闭 Z-Pay 订单 ----
       await closeZPayOrder(outTradeNo).catch(() => {
         // Z-Pay 关闭失败不影响主流程
       })
-
-      // ---- 1f. 从 order-store 删除 ----
-      // 直接删除（orderStore 没有 delete 方法，用 set + TTL 模拟）
-      // 由于有 60min TTL 清理，不手动删除也可以；但为了保持一致性，使用 markCancelled 后不清理
-      // order-store 中保留 cancelled=true 的记录，60min 后自动清理
 
       return res.status(200).json({
         code: 0,
@@ -254,8 +308,19 @@ export default async function handler(
       })
     }
 
-    // ---- 2a. 已支付订单不能取消 ----
-    if (notionOrder.status === '已发送') {
+    // ---- 2a. 状态校验（H4 修复：用 NotionOrderStatus enum）----
+    const status = parseNotionOrderStatus(notionOrder.status)
+
+    if (status === null) {
+      // 未知状态：防止误判 → 返 409 让人工介入
+      return res.status(409).json({
+        code: ErrorCode.E_STATUS_UNKNOWN,
+        message: 'E_STATUS_UNKNOWN',
+        data: null,
+      })
+    }
+
+    if (status === NotionOrderStatus.SHIPPED) {
       return res.status(400).json({
         code: ErrorCode.E_ORDER_ALREADY_PAID,
         message: 'E_ORDER_ALREADY_PAID',
@@ -263,8 +328,7 @@ export default async function handler(
       })
     }
 
-    // ---- 2b. 已取消订单幂等返回 ----
-    if (notionOrder.status === '已取消') {
+    if (status === NotionOrderStatus.CANCELLED) {
       return res.status(200).json({
         code: 0,
         message: 'success',
@@ -272,7 +336,9 @@ export default async function handler(
       })
     }
 
-    // ---- 2c. 未支付（待发送）→ 发 n8n webhook 改状态为"已取消" ----
+    // ---- 2b. PENDING → 发 n8n webhook 改状态为"已取消" ----
+    // 注意：Notion fallback 无法校验邮箱（H2 邮箱校验只对 order-store 有效）
+    // 这是可接受的：Notion fallback 触发场景是容器冷启动，本会话用户已离开浏览器
     await notifyN8nCancelOrder(outTradeNo)
 
     return res.status(200).json({

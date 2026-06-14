@@ -84,7 +84,7 @@
 | 使用次数 | number | 使用计数器 |
 
 **Database ID**：`37e4f4cf-c8e2-8073-aea5-f390b5b2c53d`
-**Notion Token**：`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`（集成"我不叫龙虾"）
+**Notion Token**：`<redacted - see INFRASTRUCTURE.md>`（集成"我不叫龙虾"）
 
 ---
 
@@ -96,8 +96,8 @@
 |------|------|---------|
 | `POST /api/pay/create-order` | 创建订单，返回 qrcode | §3.1 本节 |
 | `GET /api/pay/notify` | Z-Pay 异步回调 | §3.2 本节 |
-| `GET /api/pay/query-order` | 前端轮询订单状态（兜底） | `PAYMENT-API-SPEC.md` §3.5 |
-| `POST /api/pay/cancel-order` | 取消未支付订单 | `PAYMENT-API-SPEC.md` §3.6 |
+| `GET /api/pay/query-order` | 前端轮询订单状态（兜底） | §3.3 本节 |
+| `POST /api/pay/cancel-order` | 取消未支付订单 | §3.4 本节 |
 
 ### 3.1 `POST /api/pay/create-order`
 
@@ -171,7 +171,55 @@
 
 ---
 
-## 4. n8n Workflow 设计（2 个）
+### 3.3 `GET /api/pay/query-order`
+
+**用途**：前端 PayModal 轮询订单支付状态（兜底 Z-Pay 异步回调）
+
+**处理流程**（EdgeOne）：
+1. 读 outTradeNo 参数
+2. 优先查 order-store.get(outTradeNo)
+   - 有 → 返回 { paid, paidAt, productName, finalPrice }
+   - 无 → fallback 查 Notion 订单 DB（订单号 = outTradeNo）
+3. Notion 有 → 用购买日期判断 paid，返回订单信息
+4. 都查不到 → 返回 404 E_ORDER_NOT_FOUND
+
+**响应**：
+- 200：`{ code: 0, data: { outTradeNo, paid, paidAt, productName, finalPrice, unit: "元" } }`
+- 404：`{ code: 40011, message: "E_ORDER_NOT_FOUND" }`
+
+**性能**：< 50ms（纯内存读 + 可选 Notion fallback）
+
+---
+
+### 3.4 `POST /api/pay/cancel-order`
+
+**用途**：用户主动取消未支付订单（前端 PayModal 取消按钮 / 5 分钟超时自动调用）
+
+**处理流程**（EdgeOne）：
+1. 读 outTradeNo
+2. 查 order-store：
+   - 有 → 检查 paid 状态
+     - paid=true → return 400 E_ORDER_ALREADY_PAID
+     - cancelled=true → 幂等 return 200（已取消）
+     - paid=false → markCancelled（防 notify race） + 发 n8n webhook + 调 ZPay close + return 200
+3. order-store miss → fallback 查 Notion 订单 DB
+   - Notion 状态=已发送 → return 400 E_ORDER_ALREADY_PAID
+   - Notion 状态=已取消 → 幂等 return 200
+   - Notion 状态=待发送 → 发 n8n webhook（改状态为"已取消"） + return 200
+4. Notion 也查不到 → return 404 E_ORDER_NOT_FOUND
+
+**幂等设计**：
+- 同一 outTradeNo 多次 cancel：order-store 已删 → Notion fallback → 状态已是"已取消" → 返 200
+- cancel 与 notify race：先 markCancelled 防 notify 写入
+
+**响应**：
+- 200：`{ code: 0, data: { outTradeNo, cancelled: true } }`
+- 400：`{ code: 40012, message: "E_ORDER_ALREADY_PAID" }`
+- 404：`{ code: 40011, message: "E_ORDER_NOT_FOUND" }`
+
+---
+
+## 4. n8n Workflow 设计（3 个）
 
 ### 4.1 Workflow 1: create-order
 
@@ -260,6 +308,44 @@ Notion: Update Page
 
 ---
 
+### 4.3 Workflow 3: cancel-order
+
+**Webhook URL**：`https://n8n.one2agi.com/webhook/cancel-order`
+**触发方式**：POST
+
+**输入 payload**：
+```json
+{
+  "outTradeNo": "1750000000000-abc123",
+  "cancelledAt": "2026-06-14"
+}
+```
+
+**节点流**：
+```
+Webhook Trigger
+  ↓
+Notion: Search Pages (订单 DB)
+  filter: 订单号 = outTradeNo
+  limit: 1
+    ↓
+IF: 状态 != 已发送?
+  → Yes:
+      IF: 状态 != 已取消?
+        → Yes:
+            Notion: Update Page
+              状态: "已取消"
+        → No: (幂等跳过)
+  → No: (幂等跳过，已发货订单不处理)
+```
+
+**幂等保证**：
+- 两层 IF 判断（已发送/已取消）避免重复 UPDATE
+- 已发货（已支付）订单不处理cancel
+- 找不到订单时 IF 节点输出空，workflow 正常结束
+
+---
+
 ## 5. Cloudflare Worker
 
 ### 5.1 作用
@@ -318,24 +404,37 @@ async function handleRequest(request) {
 myNotionNext/
 ├── pages/api/pay/
 │   ├── create-order.ts  # POST：校验参数 + 折扣计算 + ZPay下单 + 发 n8n webhook
-│   └── notify.ts        # GET：MD5验签 + 金额校验 + markPaid + 发 n8n webhook
+│   ├── notify.ts        # GET：MD5验签 + 金额校验 + markPaid + 发 n8n webhook
+│   ├── query-order.ts   # GET：order-store优先 + Notion fallback（PayModal轮询兜底）
+│   └── cancel-order.ts  # POST：markCancelled + n8n webhook + ZPay close
 │
-└── lib/
-    └── discount-codes.ts # 优惠码查询 + 折扣计算（被 create-order 调用）
+├── lib/
+│   ├── discount-codes.ts  # 优惠码查询 + 折扣计算（被 create-order 调用）
+│   ├── order-store.ts     # 内存订单存储（60min TTL，paid/cancelled标记）
+│   └── env.ts              # 启动时校验9个env变量（fail-fast）
+│
+├── n8n/
+│   ├── workflow-zpay-order.json     # create-order webhook
+│   ├── workflow-zpay-notify.json    # notify webhook
+│   └── workflow-cancel-order.json   # cancel-order webhook
+│
+└── themes/starter/components/
+    ├── PayModal.js          # 支付弹窗（6态机）
+    └── PayModalProvider.js  # Context provider
 ```
 
-**仅 2 个 API 文件 + 1 个 lib 文件。**
+**4 个 API 文件 + 3 个 lib 文件 + 3 个 n8n workflow + 2 个前端组件。**
 
 **EdgeOne 环境变量**（控制台配置，不进 git）：
 ```
 ZPAY_PID=2026050116254529
-ZPAY_KEY=FFOiGaR1bNuOzVtHcUFYjfQ97VKH5ieP
+ZPAY_KEY=<redacted - see INFRASTRUCTURE.md>
 ZPAY_NOTIFY_URL=https://www.one2agi.com/api/pay/notify
-NOTION_TOKEN=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
+NOTION_TOKEN=<redacted - see INFRASTRUCTURE.md>
 NOTION_DATABASE_ID=6ab4f4cf-c8e2-825e-bde8-016c2d9be1c2
 NOTION_DISCOUNT_DATABASE_ID=37e4f4cf-c8e2-8073-aea5-f390b5b2c53d
 N8N_WEBHOOK_URL=https://n8n.one2agi.com/webhook
-N8N_WEBHOOK_SECRET=67e7993eb338e4911cfad0d3328eba1afe2112c2365a294224baaa9adab5b411
+N8N_WEBHOOK_SECRET=<redacted - see INFRASTRUCTURE.md>
 ```
 
 ---
@@ -605,33 +704,44 @@ const zpayKey = env.ZPAY_KEY
 |------|------|------|------|
 | create-order API | `pages/api/pay/create-order.ts` | ✅ | 参数校验、折扣计算、ZPay下单、n8n webhook |
 | notify API | `pages/api/pay/notify.ts` | ✅ | MD5验签、金额校验、markPaid、n8n webhook |
+| query-order API | `pages/api/pay/query-order.ts` | ✅ | order-store优先 + Notion fallback |
+| cancel-order API | `pages/api/pay/cancel-order.ts` | ✅ | markCancelled + n8n webhook + ZPay close |
 | 优惠码查询/折扣计算 | `lib/discount-codes.ts` | ✅ | Notion查询、格式校验、折扣计算 |
-| 内存订单存储 | `lib/order-store.ts` | ✅ | 60min TTL、paid标记 |
+| 内存订单存储 | `lib/order-store.ts` | ✅ | 60min TTL、paid标记、cancelled标记 |
+| 环境变量校验 | `lib/env.ts` | ✅ | 启动时fail-fast校验9个env变量 |
 | n8n create-order workflow | `n8n/workflow-zpay-order.json` | ✅ | Webhook → Notion Create Page |
 | n8n notify workflow | `n8n/workflow-zpay-notify.json` | ✅ | IF分支 → 优惠码+1 / 订单购买日期 |
+| n8n cancel-order workflow | `n8n/workflow-cancel-order.json` | ✅ | IF未发货? → IF未取消? → 改状态为已取消 |
+| PayModal 前端组件 | `themes/starter/components/PayModal.js` | ✅ | 6态机：IDLE/STEP1_FORM/STEP2_QR/SUCCESS/EXPIRED/FAILED |
+| PayModalProvider | `themes/starter/components/PayModalProvider.js` | ✅ | Context provider |
 | CF Worker | notion-proxy.faiz-world.com | ✅ | Notion API 反代（已部署） |
 
 **实现一致性确认**：
 - create-order 流程：参数校验 → 折扣计算 → order-store → ZPay下单 → n8n webhook → 返回qrcode ✅
 - notify 流程：验签 → 金额校验 → markPaid → n8n webhook → return success ✅
+- query-order 流程：order-store优先 → Notion fallback → 返回paid状态 ✅
+- cancel-order 流程：markCancelled(防race) → n8n webhook(改状态) → ZPay close → order-store保留cancelled标记 ✅
 - 折扣公式：`finalPrice = totalPrice - 减免金额`（单位：元） ✅
 - order-store fallback：容器冷启动时查 Notion 订单 DB ✅
 - n8n 幂等：Notion DB 订单号唯一键，409冲突 n8n 吞掉 ✅
+- env.ts fail-fast：9个必填env，缺一启动即报错 ✅
 
 ### 15.4 待完成项
 
 | 待完成项 | 优先级 | 说明 |
 |----------|--------|------|
-| n8n workflow field ID 配置 | 中 | 需要在 n8n UI 中打开模板，根据实际 field ID 调整后重新导出 JSON |
 | 端到端真实支付测试 | 高 | 使用真实微信 Native 支付完成一次完整流程 |
 | 优惠码使用次数 +1 验证 | 中 | notify 后检查 Notion 优惠码 page 使用次数是否正确 +1 |
+| n8n workflow field ID 配置 | 低 | 在 n8n UI 中根据实际 field ID 调整后重新导出 JSON |
 
 ### 15.5 实现与架构差异
 
 | 项目 | 架构设计 | 实际实现 | 差异说明 |
 |------|----------|----------|----------|
 | create-order n8n payload | 包含 `discountAmount`, `createdAt` | 不包含（Notion page 写入时不写这两个字段） | 不影响功能，订单页不展示这两个字段 |
-| n8n workflow | JSON 模板 | JSON 模板 + 需要 UI 配置 field ID | 预期内，需在 n8n UI 中调整后导出 |
+| cancel-order n8n payload | 未设计 | 包含 `outTradeNo`, `cancelledAt` | n8n webhook 负责改 Notion 状态为"已取消" |
+| n8n cancel-order workflow | 未设计 | 3层IF（未发货? → 未取消? → UPDATE） | 幂等保证：已发货/已取消的订单不UPDATE |
+| PayModal 状态机 | 4步（form/qrcode/success/error） | 6态（IDLE/STEP1_FORM/STEP2_QR/SUCCESS/EXPIRED/FAILED） | 增加了 EXPIRED（超时）和 IDLE（隐藏）状态 |
 
 ### 15.6 备注
 

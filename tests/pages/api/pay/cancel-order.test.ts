@@ -2,17 +2,24 @@
  * Unit tests: pages/api/pay/cancel-order.ts
  *
  * Test coverage:
- * - order-store hit + not paid → markCancelled + n8n webhook + 200 cancelled:true
- * - order-store hit + already paid → 400 E_ORDER_ALREADY_PAID
- * - order-store hit + already cancelled → 200 (idempotent)
- * - order-store miss + Notion hit + not paid → n8n webhook + 200
- * - order-store miss + Notion hit + already paid → 400 E_ORDER_ALREADY_PAID
+ * - order-store hit + 邮箱匹配 + 未支付 → markCancelled + n8n + 200
+ * - order-store hit + 邮箱匹配 + 已支付 → 400 E_ORDER_ALREADY_PAID
+ * - order-store hit + 邮箱匹配 + 已取消 → 200 幂等
+ * - order-store hit + 邮箱不匹配 → 403 E_EMAIL_MISMATCH (H2 修复)
+ * - order-store miss + Notion hit + 待发送 → n8n + 200
+ * - order-store miss + Notion hit + 已发送 → 400 E_ORDER_ALREADY_PAID
+ * - order-store miss + Notion hit + 已取消 → 200 幂等
+ * - order-store miss + Notion hit + 未知状态 → 409 E_STATUS_UNKNOWN (H4 修复)
  * - order-store miss + Notion miss → 404 E_ORDER_NOT_FOUND
+ * - Origin 缺失/跨域 → 403 E_ORIGIN_FORBIDDEN (H2 修复)
+ * - outTradeNo 含特殊字符 → 400 E_PARAM_INVALID
+ * - 缺 email → 400 E_PARAM_MISSING
  * - POST with no outTradeNo → 400 E_PARAM_MISSING
  * - method not POST → 405 E_METHOD_NOT_ALLOWED
  */
 
 import { orderStore } from '@/lib/order-store'
+import { _resetRateLimit } from '@/lib/security'
 
 // ─── Mock helpers ─────────────────────────────────────────────────────────────
 
@@ -34,15 +41,17 @@ jest.mock('@/lib/order-store', () => ({
   },
 }))
 
-jest.mock('@/pages/api/pay/cancel-order', () => ({
-  // We'll import and test the actual handler
-}))
+/** 标准请求头（通过 Origin 校验） */
+const VALID_HEADERS = { origin: 'https://www.one2agi.com' }
+const VALID_CUSTOMER = { email: 'test@test.com' }
 
 // ─── Setup / Teardown ─────────────────────────────────────────────────────────
 
 beforeEach(() => {
   jest.clearAllMocks()
+  _resetRateLimit()
   mockOrderStoreGet('trade-001', undefined)
+  process.env.NODE_ENV = 'test'
 })
 
 afterEach(() => {
@@ -53,7 +62,7 @@ afterEach(() => {
 
 describe('POST /api/pay/cancel-order', () => {
   describe('order-store hit', () => {
-    test('unpaid order → markCancelled + n8n webhook + 200 cancelled:true', async () => {
+    test('email match + unpaid order → markCancelled + n8n webhook + 200 cancelled:true', async () => {
       mockOrderStoreGet('trade-001', {
         outTradeNo: 'trade-001',
         productId: 'starter-full',
@@ -73,7 +82,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'trade-001' },
+        body: { outTradeNo: 'trade-001', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -91,7 +101,7 @@ describe('POST /api/pay/cancel-order', () => {
       }))
     })
 
-    test('already paid order → 400 E_ORDER_ALREADY_PAID', async () => {
+    test('email match + already paid order → 400 E_ORDER_ALREADY_PAID', async () => {
       mockOrderStoreGet('trade-002', {
         outTradeNo: 'trade-002',
         productId: 'starter-full',
@@ -107,7 +117,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'trade-002' },
+        body: { outTradeNo: 'trade-002', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -125,7 +136,7 @@ describe('POST /api/pay/cancel-order', () => {
       }))
     })
 
-    test('already cancelled order → idempotent 200', async () => {
+    test('email match + already cancelled order → idempotent 200', async () => {
       mockOrderStoreGet('trade-003', {
         outTradeNo: 'trade-003',
         productId: 'starter-full',
@@ -143,7 +154,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'trade-003' },
+        body: { outTradeNo: 'trade-003', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -160,13 +172,80 @@ describe('POST /api/pay/cancel-order', () => {
         data: { outTradeNo: 'trade-003', cancelled: true },
       }))
     })
+
+    test('email MISMATCH → 403 E_EMAIL_MISMATCH (H2 fix)', async () => {
+      mockOrderStoreGet('trade-004', {
+        outTradeNo: 'trade-004',
+        productId: 'starter-full',
+        productName: '基础版',
+        customerName: '张三',
+        customerEmail: 'real-owner@test.com',
+        totalPrice: 79,
+        finalPrice: 79,
+        paid: false,
+        createdAt: Date.now(),
+      })
+
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-004', customer: { email: 'attacker@evil.com' } },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 40301,
+        message: 'E_EMAIL_MISMATCH',
+      }))
+    })
+
+    test('email match is case-insensitive', async () => {
+      mockOrderStoreGet('trade-case', {
+        outTradeNo: 'trade-case',
+        productId: 'starter-full',
+        productName: '基础版',
+        customerName: '张三',
+        customerEmail: 'Test@Test.COM',
+        totalPrice: 79,
+        finalPrice: 79,
+        paid: false,
+        createdAt: Date.now(),
+      })
+
+      global.fetch = jest.fn().mockResolvedValue({ ok: true })
+
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-case', customer: { email: 'test@test.com' } },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(200)
+    })
   })
 
   describe('order-store miss → Notion fallback', () => {
-    test('Notion order exists + not paid → 200', async () => {
-      mockOrderStoreGet('trade-004', undefined)
+    test('Notion order exists + not paid (待发送) → 200', async () => {
+      mockOrderStoreGet('trade-005', undefined)
 
-      // Mock Notion query
       global.fetch = jest.fn()
         .mockResolvedValueOnce({
           ok: true,
@@ -184,7 +263,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'trade-004' },
+        body: { outTradeNo: 'trade-005', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -198,12 +278,12 @@ describe('POST /api/pay/cancel-order', () => {
       expect(res.status).toHaveBeenCalledWith(200)
       expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
         code: 0,
-        data: { outTradeNo: 'trade-004', cancelled: true },
+        data: { outTradeNo: 'trade-005', cancelled: true },
       }))
     })
 
     test('Notion order status = 已发送 → 400 E_ORDER_ALREADY_PAID', async () => {
-      mockOrderStoreGet('trade-005', undefined)
+      mockOrderStoreGet('trade-006', undefined)
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -220,7 +300,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'trade-005' },
+        body: { outTradeNo: 'trade-006', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -239,7 +320,7 @@ describe('POST /api/pay/cancel-order', () => {
     })
 
     test('Notion order status = 已取消 → idempotent 200', async () => {
-      mockOrderStoreGet('trade-006', undefined)
+      mockOrderStoreGet('trade-007', undefined)
 
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
@@ -256,7 +337,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'trade-006' },
+        body: { outTradeNo: 'trade-007', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -270,7 +352,44 @@ describe('POST /api/pay/cancel-order', () => {
       expect(res.status).toHaveBeenCalledWith(200)
       expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
         code: 0,
-        data: { outTradeNo: 'trade-006', cancelled: true },
+        data: { outTradeNo: 'trade-007', cancelled: true },
+      }))
+    })
+
+    test('Notion order status = 未知状态 → 409 E_STATUS_UNKNOWN (H4 fix)', async () => {
+      mockOrderStoreGet('trade-008', undefined)
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          results: [{
+            properties: {
+              '状态': { type: 'status', status: { name: '已退款' } }, // 未知状态
+            },
+          }],
+        }),
+      })
+
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-008', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(409)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 40013,
+        message: 'E_STATUS_UNKNOWN',
       }))
     })
 
@@ -286,7 +405,8 @@ describe('POST /api/pay/cancel-order', () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
       const req = {
         method: 'POST',
-        body: { outTradeNo: 'nonexistent' },
+        body: { outTradeNo: 'nonexistent', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -311,6 +431,7 @@ describe('POST /api/pay/cancel-order', () => {
       const req = {
         method: 'POST',
         body: {},
+        headers: VALID_HEADERS,
       }
       const jsonMock = jest.fn()
       const res = {
@@ -328,9 +449,74 @@ describe('POST /api/pay/cancel-order', () => {
       }))
     })
 
+    test('outTradeNo contains special chars → 400 E_PARAM_INVALID (H2 fix)', async () => {
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'abc;DROP', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 40001,
+        message: 'E_PARAM_INVALID',
+      }))
+    })
+
+    test('missing customer.email → 400 E_PARAM_MISSING', async () => {
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-001' }, // no customer
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(400)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 40000,
+        message: 'E_PARAM_MISSING',
+      }))
+    })
+
+    test('invalid email format → 400 E_PARAM_MISSING', async () => {
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-001', customer: { email: 'not-an-email' } },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(400)
+    })
+
     test('method not POST → 405', async () => {
       const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
-      const req = { method: 'GET' }
+      const req = { method: 'GET', headers: VALID_HEADERS }
       const jsonMock = jest.fn()
       const setHeaderMock = jest.fn()
       const res = {
@@ -343,6 +529,50 @@ describe('POST /api/pay/cancel-order', () => {
 
       expect(res.status).toHaveBeenCalledWith(405)
       expect(setHeaderMock).toHaveBeenCalledWith('Allow', 'POST')
+    })
+  })
+
+  describe('security: Origin check (H2 fix)', () => {
+    test('returns 403 when Origin missing', async () => {
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-001', customer: VALID_CUSTOMER },
+        headers: {},
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(403)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 40302,
+        message: 'E_ORIGIN_FORBIDDEN',
+      }))
+    })
+
+    test('returns 403 for cross-origin', async () => {
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-001', customer: VALID_CUSTOMER },
+        headers: { origin: 'https://evil.com' },
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(403)
     })
   })
 })

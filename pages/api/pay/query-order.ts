@@ -4,13 +4,15 @@
  * 用途：前端 PayModal 轮询订单支付状态（兜底 Z-Pay 异步回调）
  *
  * 处理流程（遵循 PAYMENT-API-SPEC.md §3.5）：
- * 1. 读 outTradeNo 参数
- * 2. 优先查 order-store.get(outTradeNo)
+ * 1. Origin 校验（同源 + allow list）— 防跨站任意调用
+ * 2. IP 限速（60 req/min）— 防自家 DoS
+ * 3. outTradeNo 白名单校验（字符集 + 长度）— 防 Notion 配额滥用
+ * 4. 优先查 order-store.get(outTradeNo)
  *    - 有 → 返回 paid 状态 + productName + finalPrice + paidAt
  *    - 无 → fallback 查 Notion 订单 DB
- * 3. fallback 也查不到 → 返回 404 E_ORDER_NOT_FOUND
+ * 5. fallback 也查不到 → 返回 404 E_ORDER_NOT_FOUND
  *
- * 遵循 PAYMENT-IMPLEMENTATION-NOTES.md B.1 实施级设计
+ * 遵循 PAYMENT-IMPLEMENTATION-NOTES.md B.1 + 2026-06-14 安全评审 H1
  *
  * @module pages/api/pay/query-order
  */
@@ -23,15 +25,8 @@ import {
   getNumber,
   type NotionPropertyValue,
 } from '@/lib/notion-utils'
-
-// ============= 错误码 =============
-const ErrorCode = {
-  E_ORDER_NOT_FOUND: 40011,
-  E_NOTION_FAIL: 40010,
-  E_INTERNAL: 50001,
-  E_METHOD_NOT_ALLOWED: 40501,
-  E_PARAM_MISSING: 40000,
-} as const
+import { checkOrigin, validateOutTradeNo, rateLimit, getClientIp } from '@/lib/security'
+import { ErrorCode } from '@/lib/errors'
 
 // ============= 响应类型 =============
 interface QueryOrderData {
@@ -50,6 +45,9 @@ type QueryOrderResponse =
   | { code: typeof ErrorCode.E_INTERNAL; message: 'E_INTERNAL'; data: null }
   | { code: typeof ErrorCode.E_METHOD_NOT_ALLOWED; message: 'E_METHOD_NOT_ALLOWED'; data: null }
   | { code: typeof ErrorCode.E_PARAM_MISSING; message: 'E_PARAM_MISSING'; data: null }
+  | { code: typeof ErrorCode.E_PARAM_INVALID; message: 'E_PARAM_INVALID'; data: null }
+  | { code: typeof ErrorCode.E_ORIGIN_FORBIDDEN; message: 'E_ORIGIN_FORBIDDEN'; data: null }
+  | { code: typeof ErrorCode.E_RATE_LIMITED; message: 'E_RATE_LIMITED'; data: null }
 
 // ============= Notion 查询（fallback） =============
 /**
@@ -137,12 +135,42 @@ export default async function handler(
     })
   }
 
+  // ---- 0. Origin 校验（防跨站调用）----
+  if (!checkOrigin(req)) {
+    return res.status(403).json({
+      code: ErrorCode.E_ORIGIN_FORBIDDEN,
+      message: 'E_ORIGIN_FORBIDDEN',
+      data: null,
+    })
+  }
+
+  // ---- 0b. IP 限速（60 req/min）----
+  const clientIp = getClientIp(req)
+  if (!rateLimit(clientIp)) {
+    res.setHeader('Retry-After', '60')
+    return res.status(429).json({
+      code: ErrorCode.E_RATE_LIMITED,
+      message: 'E_RATE_LIMITED',
+      data: null,
+    })
+  }
+
   const { outTradeNo } = req.query
 
   if (!outTradeNo || typeof outTradeNo !== 'string') {
     return res.status(400).json({
       code: ErrorCode.E_PARAM_MISSING,
       message: 'E_PARAM_MISSING',
+      data: null,
+    })
+  }
+
+  // ---- 0c. outTradeNo 白名单校验（字符集 + 长度）----
+  const validation = validateOutTradeNo(outTradeNo)
+  if (!validation.valid) {
+    return res.status(400).json({
+      code: ErrorCode.E_PARAM_INVALID,
+      message: 'E_PARAM_INVALID',
       data: null,
     })
   }
