@@ -1,0 +1,120 @@
+{
+  "name": "Z-Pay 取消订单处理",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cancel-order",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-cancel-order",
+      "name": "Webhook (cancel-order)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "cancel-order"
+    },
+    {
+      "parameters": {
+        "databaseId": "6ab4f4cf-c8e2-825e-bde8-016c2d9be1c2",
+        "filter": "{\"property\": {\"订单号\": {\"rich_text\": {\"equals\": \"{{ $json.outTradeNo }}\"}}}}",
+        "options": {"limit": 1}
+      },
+      "id": "notion-search-order",
+      "name": "Notion: 查询订单 Page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "status-not-sent",
+                "leftValue": "{{ $json.properties.状态.status.name }}",
+                "rightValue": "已发送",
+                "operator": {"type": "string", "operation": "notEquals"}
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "options": {}
+      },
+      "id": "if-not-sent",
+      "name": "IF: 未发货?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "status-not-cancelled",
+                "leftValue": "{{ $json.properties.状态.status.name }}",
+                "rightValue": "已取消",
+                "operator": {"type": "string", "operation": "notEquals"}
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "options": {}
+      },
+      "id": "if-not-already-cancelled",
+      "name": "IF: 未取消?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "pageId": "={{ $json.id }}",
+        "properties": {
+          "状态": {"status": {"name": "已取消"}}
+        },
+        "options": {}
+      },
+      "id": "notion-update-cancelled",
+      "name": "Notion: 改状态为已取消",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (cancel-order)": {
+      "main": [[{"node": "Notion: 查询订单 Page", "type": "main", "index": 0}]]
+    },
+    "Notion: 查询订单 Page": {
+      "main": [[{"node": "IF: 未发货?", "type": "main", "index": 0}]]
+    },
+    "IF: 未发货?": {
+      "main": [
+        [{"node": "IF: 未取消?", "type": "main", "index": 0}],
+        [{"node": null, "type": "main", "index": 0}]
+      ]
+    },
+    "IF: 未取消?": {
+      "main": [
+        [{"node": "Notion: 改状态为已取消", "type": "main", "index": 0}],
+        [{"node": null, "type": "main", "index": 0}]
+      ]
+    },
+    "Notion: 改状态为已取消": {
+      "main": [[{"node": null, "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {},
+  "notes": "【模板】需要在 n8n UI 中打开并根据实际 field ID 调整。\n创建后导出覆盖本文件，进 git 管理。\n\n节点流说明：\n1. Webhook 接收 { outTradeNo, cancelledAt }\n2. Notion 查询订单 DB（订单号 = outTradeNo）\n3. IF: 状态 != 已发送？ → Yes 继续，No 幂等跳过\n4. IF: 状态 != 已取消？ → Yes 继续改状态，No 幂等跳过\n5. Notion Update Page 状态 = 已取消\n\n幂等保证：\n- 两层 IF 判断（已发送/已取消）避免重复 UPDATE\n- 找不到订单时 IF 节点输出空，workflow 正常结束"
+}

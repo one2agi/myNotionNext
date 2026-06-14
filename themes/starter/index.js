@@ -40,6 +40,8 @@ import SearchInput from './components/SearchInput'
 import { SignInForm } from './components/SignInForm'
 import { SignUpForm } from './components/SignUpForm'
 import { SVG404 } from './components/svg/SVG404'
+import { PayModalProvider } from './components/PayModalProvider'
+import { PayModal } from './components/PayModal'
 
 /**
  * 布局框架
@@ -71,7 +73,8 @@ const LayoutBase = props => {
     }, [])
 
     return (
-        <div
+        <PayModalProvider>
+          <div
             id='theme-starter'
             className={`${siteConfig('FONT_STYLE')} min-h-screen flex flex-col dark:bg-[#212b36] scroll-smooth`}>
             <Style />
@@ -84,14 +87,18 @@ const LayoutBase = props => {
             </div>
 
             {/* 页脚 */}
-            
+
             {isLiteMode ? <></> : <Footer {...props} />}
 
             {/* 悬浮按钮 */}
             {isLiteMode ? <></> : <BackToTopButton />}
 
+            {/* 支付弹窗 */}
+            <PayModal />
+
             {/* <MadeWithButton/> */}
         </div>
+        </PayModalProvider>
     )
 }
 
