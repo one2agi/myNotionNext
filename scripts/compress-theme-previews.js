@@ -5,7 +5,7 @@ const path = require('node:path')
 
 let sharp
 try {
-  sharp = require('sharp-linux-x64')
+  sharp = require('@img/sharp-linux-x64')
 } catch (error) {
   console.error(
     'Missing optional dependency "sharp". Run: yarn add -D sharp'
