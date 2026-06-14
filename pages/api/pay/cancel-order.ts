@@ -103,28 +103,36 @@ async function closeZPayOrder(outTradeNo: string): Promise<void> {
 // ============= n8n webhook =============
 /**
  * 发送取消订单 webhook 到 n8n（改 Notion 状态为"已取消"）
+ *
+ * 设计：fire-and-forget — n8n 失败不应阻塞主流程
+ * - 失败时仅 console.warn，主流程继续返 200 cancelled:true
+ * - 下次重试 cancel 时通过 order-store.cancelled 幂等分支兜底
  */
 async function notifyN8nCancelOrder(outTradeNo: string): Promise<void> {
   const webhookUrl = process.env.N8N_WEBHOOK_URL
   const webhookSecret = process.env.N8N_WEBHOOK_SECRET
 
   if (!webhookUrl || !webhookSecret) {
-    // n8n webhook 失败不影响主流程（异步，幂等）
     console.warn('[cancel-order] N8N_WEBHOOK_URL or N8N_WEBHOOK_SECRET not set, skipping n8n notify')
     return
   }
 
-  await fetch(`${webhookUrl}/cancel-order`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-n8n-secret': webhookSecret,
-    },
-    body: JSON.stringify({
-      outTradeNo,
-      cancelledAt: new Date().toISOString().slice(0, 10),
-    }),
-  })
+  try {
+    await fetch(`${webhookUrl}/cancel-order`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-n8n-secret': webhookSecret,
+      },
+      body: JSON.stringify({
+        outTradeNo,
+        cancelledAt: new Date().toISOString().slice(0, 10),
+      }),
+    })
+  } catch (err) {
+    // 设计意图：n8n 失败不影响主流程（异步，幂等）
+    console.warn('[cancel-order] n8n notify failed:', err instanceof Error ? err.message : err)
+  }
 }
 
 // ============= Notion 查询（fallback） =============
@@ -349,9 +357,10 @@ export default async function handler(
   } catch (err) {
     const message = err instanceof Error ? err.message : 'E_INTERNAL'
     if (message.startsWith('E_NOTION_FAIL')) {
+      // P7 修复：catch 块正确返回 E_NOTION_FAIL，而非错误的 E_INTERNAL
       return res.status(500).json({
-        code: ErrorCode.E_INTERNAL,
-        message: 'E_INTERNAL',
+        code: ErrorCode.E_NOTION_FAIL,
+        message: 'E_NOTION_FAIL',
         data: null,
       })
     }

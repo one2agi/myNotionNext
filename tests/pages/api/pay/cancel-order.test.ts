@@ -425,7 +425,7 @@ describe('POST /api/pay/cancel-order', () => {
     })
 
     // P11: Notion 5xx 失败路径
-    test('Notion API 5xx → 500 E_INTERNAL (P11 coverage)', async () => {
+    test('Notion API 5xx → 500 E_NOTION_FAIL (P11 coverage, P7 fixed)', async () => {
       mockOrderStoreGet('trade-009', undefined)
 
       global.fetch = jest.fn().mockResolvedValue({
@@ -449,19 +449,17 @@ describe('POST /api/pay/cancel-order', () => {
 
       await handlerFn(req as never, res as never)
 
+      // P7 修复后：catch 块正确返回 E_NOTION_FAIL（之前错误返回 E_INTERNAL）
       expect(res.status).toHaveBeenCalledWith(500)
-      // catch 块将 E_NOTION_FAIL 归一为 E_INTERNAL
       expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
-        code: 50001,
-        message: 'E_INTERNAL',
+        code: 40010,
+        message: 'E_NOTION_FAIL',
       }))
     })
 
     // P12: n8n webhook 失败（order-store hit 场景）
-    // TODO: 当前实现下，n8n 失败会触发外层 catch 返 500。设计意图（注释：失败不影响主流程）
-    // 未真正实现 — notifyN8nCancelOrder 缺少 try/catch 包裹。
-    // 建议未来修复：在 notifyN8nCancelOrder 外层加 .catch(...) + console.warn
-    test('n8n webhook failure (network error) → 500 E_INTERNAL (current behavior; design intent is 200, P12 coverage)', async () => {
+    // P12 衍生修复：notifyN8nCancelOrder 加 try/catch 后，n8n 失败不再阻塞主流程
+    test('n8n webhook failure (network error) → 200 cancelled:true (fire-and-forget, P12 fix)', async () => {
       mockOrderStoreGet('trade-010', {
         outTradeNo: 'trade-010',
         productId: 'starter-full',
@@ -475,10 +473,10 @@ describe('POST /api/pay/cancel-order', () => {
         cancelled: false,
       })
 
-      // n8n webhook 抛出网络错误
+      // n8n webhook 抛出网络错误（Z-Pay close 也失败）
       global.fetch = jest.fn().mockImplementation((url: string) => {
-        if (url.includes('/cancel-order')) {
-          return Promise.reject(new Error('n8n network failure'))
+        if (url.includes('/cancel-order') || url.includes('z-pay.cn')) {
+          return Promise.reject(new Error('network failure'))
         }
         return Promise.resolve({ ok: true })
       })
@@ -498,13 +496,12 @@ describe('POST /api/pay/cancel-order', () => {
 
       await handlerFn(req as never, res as never)
 
-      // 当前实际行为：n8n 失败被外层 catch → 500 E_INTERNAL
-      // 设计意图是返 200（"失败不影响主流程"），但代码未实现
-      // 此测试固定当前行为以防回归
-      expect(res.status).toHaveBeenCalledWith(500)
+      // P12 修复后：n8n + Z-Pay 都失败时仍返 200（fire-and-forget 设计）
+      // order-store 已 markCancelled，下次再调走幂等分支
+      expect(res.status).toHaveBeenCalledWith(200)
       expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
-        code: 50001,
-        message: 'E_INTERNAL',
+        code: 0,
+        data: { outTradeNo: 'trade-010', cancelled: true },
       }))
     })
   })
