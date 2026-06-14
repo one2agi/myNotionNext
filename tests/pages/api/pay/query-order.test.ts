@@ -194,6 +194,33 @@ describe('GET /api/pay/query-order', () => {
         message: 'E_ORDER_NOT_FOUND',
       }))
     })
+
+    // P13: Notion 5xx 失败场景
+    test('Notion API 5xx → 500 E_NOTION_FAIL (P13 coverage)', async () => {
+      mockOrderStoreGet('notion-fail', undefined)
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({}),
+      })
+
+      const { default: handlerFn } = await import('@/pages/api/pay/query-order')
+      const req = { method: 'GET', query: { outTradeNo: 'notion-fail' }, headers: VALID_HEADERS }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(500)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 40010,
+        message: 'E_NOTION_FAIL',
+      }))
+    })
   })
 
   describe('error handling', () => {

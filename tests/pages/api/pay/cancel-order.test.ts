@@ -423,6 +423,90 @@ describe('POST /api/pay/cancel-order', () => {
         message: 'E_ORDER_NOT_FOUND',
       }))
     })
+
+    // P11: Notion 5xx 失败路径
+    test('Notion API 5xx → 500 E_INTERNAL (P11 coverage)', async () => {
+      mockOrderStoreGet('trade-009', undefined)
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        json: () => Promise.reject(new Error('not json')),
+      })
+
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-009', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      expect(res.status).toHaveBeenCalledWith(500)
+      // catch 块将 E_NOTION_FAIL 归一为 E_INTERNAL
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 50001,
+        message: 'E_INTERNAL',
+      }))
+    })
+
+    // P12: n8n webhook 失败（order-store hit 场景）
+    // TODO: 当前实现下，n8n 失败会触发外层 catch 返 500。设计意图（注释：失败不影响主流程）
+    // 未真正实现 — notifyN8nCancelOrder 缺少 try/catch 包裹。
+    // 建议未来修复：在 notifyN8nCancelOrder 外层加 .catch(...) + console.warn
+    test('n8n webhook failure (network error) → 500 E_INTERNAL (current behavior; design intent is 200, P12 coverage)', async () => {
+      mockOrderStoreGet('trade-010', {
+        outTradeNo: 'trade-010',
+        productId: 'starter-full',
+        productName: '基础版',
+        customerName: '张三',
+        customerEmail: 'test@test.com',
+        totalPrice: 79,
+        finalPrice: 79,
+        paid: false,
+        createdAt: Date.now(),
+        cancelled: false,
+      })
+
+      // n8n webhook 抛出网络错误
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.includes('/cancel-order')) {
+          return Promise.reject(new Error('n8n network failure'))
+        }
+        return Promise.resolve({ ok: true })
+      })
+
+      const { default: handlerFn } = await import('@/pages/api/pay/cancel-order')
+      const req = {
+        method: 'POST',
+        body: { outTradeNo: 'trade-010', customer: VALID_CUSTOMER },
+        headers: VALID_HEADERS,
+      }
+      const jsonMock = jest.fn()
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jsonMock,
+        setHeader: jest.fn(),
+      }
+
+      await handlerFn(req as never, res as never)
+
+      // 当前实际行为：n8n 失败被外层 catch → 500 E_INTERNAL
+      // 设计意图是返 200（"失败不影响主流程"），但代码未实现
+      // 此测试固定当前行为以防回归
+      expect(res.status).toHaveBeenCalledWith(500)
+      expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({
+        code: 50001,
+        message: 'E_INTERNAL',
+      }))
+    })
   })
 
   describe('error handling', () => {

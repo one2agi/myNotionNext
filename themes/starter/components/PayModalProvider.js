@@ -37,12 +37,14 @@ import { createContext, useContext, useState, useCallback, useRef } from 'react'
  * @property {string} qrcode
  * @property {string} imgUrl
  * @property {string} errorMessage
- * @property {string} cancelError      // HIGH 1: 取消订单错误（HIGH 1 修复）
+ * @property {string} cancelError            // HIGH 1: 取消订单错误展示
+ * @property {string} customerEmail          // H2: 提交时记录，cancel-order 校验用
+ * @property {string} customerName           // H2: 保留客户姓名（未来扩展用）
  * @property {Function} openPayModal
  * @property {Function} closePayModal
  * @property {Function} submitForm
  * @property {Function} cancelOrder
- * @property {Function} clearCancelError // HIGH 1: 清除取消错误
+ * @property {Function} clearCancelError     // HIGH 1: 清除 cancelError
  */
 
 /** @type {import('react').Context<PayModalContextValue | null>} */
